@@ -67,10 +67,7 @@
     }
     .status-dot.connected { background: #22c55e; }
 
-    #status-text {
-      font-size: 0.9rem;
-      color: #9ca3af;
-    }
+    #status-text { font-size: 0.9rem; color: #9ca3af; }
 
     .compass {
       width: 120px;
@@ -78,16 +75,98 @@
       margin: 12px auto 0;
       position: relative;
     }
-
-    .compass svg {
-      width: 100%;
-      height: 100%;
-    }
+    .compass svg { width: 100%; height: 100%; }
 
     #arrow {
       transform-origin: 60px 60px;
       transition: transform 0.5s ease;
     }
+
+    /* ── Calibration overlay ── */
+    #calibration-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 10, 20, 0.97);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 32px;
+      text-align: center;
+    }
+
+    #calibration-overlay h2 {
+      font-size: 1.3rem;
+      color: #a78bfa;
+      margin-bottom: 16px;
+    }
+
+    #calibration-overlay p {
+      font-size: 0.95rem;
+      color: #9ca3af;
+      line-height: 1.6;
+      margin-bottom: 24px;
+      max-width: 280px;
+    }
+
+    .cal-illustration {
+      font-size: 3rem;
+      margin-bottom: 24px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.92); }
+    }
+
+    #calibrate-btn {
+      padding: 14px 32px;
+      background: #a78bfa;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #calibrate-btn:active { transform: scale(0.96); background: #7c3aed; }
+    #calibrate-btn:disabled { background: #4b5563; cursor: default; }
+
+    #cal-readiness {
+      font-size: 0.8rem;
+      color: #6b6b9a;
+      margin-top: 14px;
+    }
+    #cal-readiness .ready { color: #22c55e; }
+    #cal-readiness .not-ready { color: #ef4444; }
+
+    #skip-cal {
+      margin-top: 18px;
+      background: none;
+      border: none;
+      color: #4b5563;
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    /* ── small buttons inside cards ── */
+    .small-btn {
+      margin-top: 12px;
+      padding: 7px 14px;
+      background: transparent;
+      color: #a78bfa;
+      border: 1px solid #a78bfa;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .small-btn:hover { background: rgba(167,139,250,0.12); }
 
     #compass-permission-btn {
       display: none;
@@ -108,6 +187,14 @@
       text-align: center;
     }
 
+    #calibration-badge {
+      display: none;
+      font-size: 0.72rem;
+      color: #22c55e;
+      margin-top: 4px;
+      text-align: center;
+    }
+
     #log {
       font-size: 0.72rem;
       color: #4b5563;
@@ -118,6 +205,26 @@
   </style>
 </head>
 <body>
+
+  <!-- ── Calibration overlay (shown first) ── -->
+  <div id="calibration-overlay">
+    <div class="cal-illustration">📱↔️📱</div>
+    <h2>כיול כיוון</h2>
+    <p>
+      עמדו מול הטלפון השני וכוונו את הטלפון ישירות אליו.<br><br>
+      לחצו על הכפתור ברגע שאתם מכוונים ישירות אל הטלפון השני.
+    </p>
+    <div id="cal-readiness">
+      <span id="cal-gps" class="not-ready">⬤ GPS</span>
+      &nbsp;
+      <span id="cal-other" class="not-ready">⬤ טלפון שני</span>
+      &nbsp;
+      <span id="cal-compass" class="not-ready">⬤ מצפן</span>
+    </div>
+    <br>
+    <button id="calibrate-btn" onclick="doCalibrate()" disabled>כייל עכשיו</button>
+    <button id="skip-cal" onclick="skipCalibration()">דלג על כיול</button>
+  </div>
 
   <h1>📡 מאתר מיקום בזמן אמת</h1>
 
@@ -143,7 +250,7 @@
     </div>
   </div>
 
-  <!-- Angle to other phone (relative to your heading) -->
+  <!-- Angle -->
   <div class="card">
     <h2>כיוון לטלפון השני</h2>
     <div>
@@ -151,51 +258,106 @@
       <span class="unit">°</span>
     </div>
     <div id="heading-status">ממתין לחיישן כיוון...</div>
+    <div id="calibration-badge">✓ מכויל</div>
     <button id="compass-permission-btn" onclick="requestCompassPermission()">אפשר גישה לחיישן</button>
     <div class="compass">
       <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-        <!-- Compass ring -->
         <circle cx="60" cy="60" r="55" fill="none" stroke="#2d2d4e" stroke-width="2"/>
-        <!-- "Ahead" label at top = direction you're facing -->
         <text x="60" y="14" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="bold">קדימה</text>
         <text x="60" y="112" text-anchor="middle" fill="#6b6b9a" font-size="10">אחורה</text>
         <text x="108" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">ימין</text>
         <text x="12" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">שמאל</text>
-        <!-- Arrow pointing toward other phone -->
         <g id="arrow">
           <polygon points="60,15 65,60 60,55 55,60" fill="#a78bfa"/>
           <polygon points="60,105 65,60 60,65 55,60" fill="#4b5563"/>
         </g>
       </svg>
     </div>
+    <!-- Recalibrate button inside main UI -->
+    <button class="small-btn" onclick="showCalibrationOverlay()">כייל מחדש</button>
   </div>
 
   <div id="log">ממתין לנתונים...</div>
 
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
-    // ─── Connect to server ───────────────────────────────────────────
     const socket = io();
 
-    const dot = document.getElementById("dot");
-    const statusText = document.getElementById("status-text");
-    const distanceEl = document.getElementById("distance");
-    const angleEl = document.getElementById("angle");
-    const arrowEl = document.getElementById("arrow");
-    const myLocationEl = document.getElementById("my-location");
-    const logEl = document.getElementById("log");
-    const headingStatusEl = document.getElementById("heading-status");
-    const permissionBtn = document.getElementById("compass-permission-btn");
+    const dot            = document.getElementById("dot");
+    const statusText     = document.getElementById("status-text");
+    const distanceEl     = document.getElementById("distance");
+    const angleEl        = document.getElementById("angle");
+    const arrowEl        = document.getElementById("arrow");
+    const myLocationEl   = document.getElementById("my-location");
+    const logEl          = document.getElementById("log");
+    const headingStatusEl= document.getElementById("heading-status");
+    const permissionBtn  = document.getElementById("compass-permission-btn");
+    const calBadge       = document.getElementById("calibration-badge");
+    const calibrateBtn   = document.getElementById("calibrate-btn");
+    const overlay        = document.getElementById("calibration-overlay");
+
+    // Readiness indicators in overlay
+    const calGpsEl     = document.getElementById("cal-gps");
+    const calOtherEl   = document.getElementById("cal-other");
+    const calCompassEl = document.getElementById("cal-compass");
 
     let myLat = null, myLng = null;
-    let myHeading = null;       // degrees from North, 0–360
-    let lastBearing = null;     // absolute bearing to other phone
+    let myHeading = null;
+    let lastBearing = null;
 
+    // Calibration offset: how many degrees to subtract from the raw relative angle
+    // When user calibrates pointing directly at the other phone,
+    // the raw relativeAngle at that moment should ideally be 0.
+    // We store: calibrationOffset = rawRelativeAngle at calibration time
+    // Then: displayAngle = rawRelativeAngle - calibrationOffset
+    let calibrationOffset = 0;
+    let isCalibrated = false;
+
+    // ─── Calibration readiness check ────────────────────────────────
+    function updateCalReadiness() {
+      const gpsOk     = myLat !== null && myLng !== null;
+      const otherOk   = lastBearing !== null;
+      const compassOk = myHeading !== null;
+
+      calGpsEl.className     = gpsOk     ? "ready" : "not-ready";
+      calOtherEl.className   = otherOk   ? "ready" : "not-ready";
+      calCompassEl.className = compassOk ? "ready" : "not-ready";
+
+      calibrateBtn.disabled = !(gpsOk && otherOk && compassOk);
+      if (!calibrateBtn.disabled) {
+        calibrateBtn.textContent = "כייל עכשיו ✓";
+      }
+    }
+
+    function showCalibrationOverlay() {
+      overlay.style.display = "flex";
+      updateCalReadiness();
+    }
+
+    function skipCalibration() {
+      overlay.style.display = "none";
+      calBadge.style.display = "none";
+    }
+
+    function doCalibrate() {
+      if (myHeading === null || lastBearing === null) return;
+
+      // The raw relative angle right now — this should become 0 after calibration
+      const rawRelative = (lastBearing - myHeading + 360) % 360;
+      calibrationOffset = rawRelative;
+      isCalibrated = true;
+
+      overlay.style.display = "none";
+      calBadge.style.display = "block";
+
+      updateArrow();
+    }
+
+    // ─── Socket ──────────────────────────────────────────────────────
     socket.on("connect", () => {
       dot.classList.add("connected");
       statusText.textContent = "מחובר לשרת ✓";
     });
-
     socket.on("disconnect", () => {
       dot.classList.remove("connected");
       statusText.textContent = "מנותק";
@@ -209,6 +371,7 @@
           myLng = pos.coords.longitude;
           myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
           socket.emit("send-location", { lat: myLat, lng: myLng });
+          updateCalReadiness();
         },
         (err) => {
           myLocationEl.textContent = "שגיאה: " + err.message;
@@ -220,7 +383,7 @@
       logEl.textContent = "הדפדפן לא תומך ב-GPS";
     }
 
-    // ─── Device Orientation (Compass) ────────────────────────────────
+    // ─── Device Orientation ──────────────────────────────────────────
     function startCompass() {
       if (window.DeviceOrientationEvent) {
         window.addEventListener("deviceorientationabsolute", handleOrientation, true);
@@ -232,26 +395,21 @@
 
     function handleOrientation(event) {
       let heading = null;
-
       if (event.absolute && event.alpha !== null) {
-        // Android / absolute orientation: alpha is degrees from North
         heading = (360 - event.alpha) % 360;
       } else if (event.webkitCompassHeading !== undefined) {
-        // iOS: webkitCompassHeading is degrees from North directly
         heading = event.webkitCompassHeading;
       } else if (event.alpha !== null) {
-        // Fallback: non-absolute alpha (less accurate)
         heading = (360 - event.alpha) % 360;
       }
-
       if (heading !== null) {
         myHeading = heading;
         headingStatusEl.textContent = `כיוון: ${Math.round(heading)}° מצפון`;
+        updateCalReadiness();
         updateArrow();
       }
     }
 
-    // iOS 13+ requires permission
     function requestCompassPermission() {
       if (typeof DeviceOrientationEvent.requestPermission === "function") {
         DeviceOrientationEvent.requestPermission()
@@ -264,16 +422,12 @@
               headingStatusEl.textContent = "הרשאה נדענית";
             }
           })
-          .catch(() => {
-            headingStatusEl.textContent = "שגיאה בגישה לחיישן";
-          });
+          .catch(() => { headingStatusEl.textContent = "שגיאה בגישה לחיישן"; });
       }
     }
 
-    // Auto-start or show permission button
     if (typeof DeviceOrientationEvent !== "undefined" &&
         typeof DeviceOrientationEvent.requestPermission === "function") {
-      // iOS 13+: need explicit user gesture
       permissionBtn.style.display = "inline-block";
       headingStatusEl.textContent = "נדרשת אישור לגישה לחיישן";
     } else {
@@ -297,27 +451,23 @@
         ? Math.round(dist)
         : (dist / 1000).toFixed(2) + " ק״מ";
 
-      if (dist < 1000) {
-        document.querySelector('.unit').textContent = "מטרים";
-      } else {
-        document.querySelector('.unit').textContent = "";
-      }
+      document.querySelector('.unit').textContent = dist < 1000 ? "מטרים" : "";
 
+      updateCalReadiness();
       updateArrow();
     });
 
-    // ─── Update arrow based on relative angle ────────────────────────
+    // ─── Update arrow ─────────────────────────────────────────────────
     function updateArrow() {
       if (lastBearing === null) return;
 
       if (myHeading !== null) {
-        // Relative angle: where is the other phone compared to the direction I'm facing?
-        // 0° = straight ahead, 90° = to my right, -90° = to my left
-        const relativeAngle = (lastBearing - myHeading + 360) % 360;
-        angleEl.textContent = Math.round(relativeAngle);
-        arrowEl.style.transform = `rotate(${relativeAngle}deg)`;
+        const rawRelative = (lastBearing - myHeading + 360) % 360;
+        // Apply calibration offset so "pointing at other phone" = 0°
+        const displayAngle = (rawRelative - calibrationOffset + 360) % 360;
+        angleEl.textContent = Math.round(displayAngle);
+        arrowEl.style.transform = `rotate(${displayAngle}deg)`;
       } else {
-        // No heading available — fall back to absolute bearing
         angleEl.textContent = Math.round(lastBearing) + " (צפון)";
         arrowEl.style.transform = `rotate(${lastBearing}deg)`;
       }
