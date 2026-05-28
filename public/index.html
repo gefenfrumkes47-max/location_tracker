@@ -89,6 +89,25 @@
       transition: transform 0.5s ease;
     }
 
+    #compass-permission-btn {
+      display: none;
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #a78bfa;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    #heading-status {
+      font-size: 0.75rem;
+      color: #6b6b9a;
+      margin-top: 6px;
+      text-align: center;
+    }
+
     #log {
       font-size: 0.72rem;
       color: #4b5563;
@@ -124,22 +143,25 @@
     </div>
   </div>
 
-  <!-- Angle -->
+  <!-- Angle to other phone (relative to your heading) -->
   <div class="card">
-    <h2>זווית ביחס לצפון</h2>
+    <h2>כיוון לטלפון השני</h2>
     <div>
       <span class="value" id="angle">--</span>
       <span class="unit">°</span>
     </div>
+    <div id="heading-status">ממתין לחיישן כיוון...</div>
+    <button id="compass-permission-btn" onclick="requestCompassPermission()">אפשר גישה לחיישן</button>
     <div class="compass">
       <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
         <!-- Compass ring -->
         <circle cx="60" cy="60" r="55" fill="none" stroke="#2d2d4e" stroke-width="2"/>
-        <text x="60" y="14" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="bold">N</text>
-        <text x="60" y="112" text-anchor="middle" fill="#6b6b9a" font-size="10">S</text>
-        <text x="108" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">E</text>
-        <text x="12" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">W</text>
-        <!-- Arrow -->
+        <!-- "Ahead" label at top = direction you're facing -->
+        <text x="60" y="14" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="bold">קדימה</text>
+        <text x="60" y="112" text-anchor="middle" fill="#6b6b9a" font-size="10">אחורה</text>
+        <text x="108" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">ימין</text>
+        <text x="12" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">שמאל</text>
+        <!-- Arrow pointing toward other phone -->
         <g id="arrow">
           <polygon points="60,15 65,60 60,55 55,60" fill="#a78bfa"/>
           <polygon points="60,105 65,60 60,65 55,60" fill="#4b5563"/>
@@ -153,7 +175,6 @@
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
     // ─── Connect to server ───────────────────────────────────────────
-    // In production this auto-detects the server URL
     const socket = io();
 
     const dot = document.getElementById("dot");
@@ -163,8 +184,12 @@
     const arrowEl = document.getElementById("arrow");
     const myLocationEl = document.getElementById("my-location");
     const logEl = document.getElementById("log");
+    const headingStatusEl = document.getElementById("heading-status");
+    const permissionBtn = document.getElementById("compass-permission-btn");
 
     let myLat = null, myLng = null;
+    let myHeading = null;       // degrees from North, 0–360
+    let lastBearing = null;     // absolute bearing to other phone
 
     socket.on("connect", () => {
       dot.classList.add("connected");
@@ -195,6 +220,66 @@
       logEl.textContent = "הדפדפן לא תומך ב-GPS";
     }
 
+    // ─── Device Orientation (Compass) ────────────────────────────────
+    function startCompass() {
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener("deviceorientationabsolute", handleOrientation, true);
+        window.addEventListener("deviceorientation", handleOrientation, true);
+      } else {
+        headingStatusEl.textContent = "חיישן כיוון לא זמין במכשיר זה";
+      }
+    }
+
+    function handleOrientation(event) {
+      let heading = null;
+
+      if (event.absolute && event.alpha !== null) {
+        // Android / absolute orientation: alpha is degrees from North
+        heading = (360 - event.alpha) % 360;
+      } else if (event.webkitCompassHeading !== undefined) {
+        // iOS: webkitCompassHeading is degrees from North directly
+        heading = event.webkitCompassHeading;
+      } else if (event.alpha !== null) {
+        // Fallback: non-absolute alpha (less accurate)
+        heading = (360 - event.alpha) % 360;
+      }
+
+      if (heading !== null) {
+        myHeading = heading;
+        headingStatusEl.textContent = `כיוון: ${Math.round(heading)}° מצפון`;
+        updateArrow();
+      }
+    }
+
+    // iOS 13+ requires permission
+    function requestCompassPermission() {
+      if (typeof DeviceOrientationEvent.requestPermission === "function") {
+        DeviceOrientationEvent.requestPermission()
+          .then((state) => {
+            if (state === "granted") {
+              startCompass();
+              permissionBtn.style.display = "none";
+              headingStatusEl.textContent = "חיישן כיוון פעיל";
+            } else {
+              headingStatusEl.textContent = "הרשאה נדענית";
+            }
+          })
+          .catch(() => {
+            headingStatusEl.textContent = "שגיאה בגישה לחיישן";
+          });
+      }
+    }
+
+    // Auto-start or show permission button
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS 13+: need explicit user gesture
+      permissionBtn.style.display = "inline-block";
+      headingStatusEl.textContent = "נדרשת אישור לגישה לחיישן";
+    } else {
+      startCompass();
+    }
+
     // ─── Receive other device location ───────────────────────────────
     socket.on("receive-location", (data) => {
       logEl.textContent = `קיבלנו מיקום מהטלפון השני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}`;
@@ -206,7 +291,7 @@
       }
 
       const dist = haversineDistance(myLat, myLng, data.lat, data.lng);
-      const bearing = calcBearing(myLat, myLng, data.lat, data.lng);
+      lastBearing = calcBearing(myLat, myLng, data.lat, data.lng);
 
       distanceEl.textContent = dist < 1000
         ? Math.round(dist)
@@ -218,13 +303,29 @@
         document.querySelector('.unit').textContent = "";
       }
 
-      angleEl.textContent = Math.round(bearing);
-      arrowEl.style.transform = `rotate(${bearing}deg)`;
+      updateArrow();
     });
+
+    // ─── Update arrow based on relative angle ────────────────────────
+    function updateArrow() {
+      if (lastBearing === null) return;
+
+      if (myHeading !== null) {
+        // Relative angle: where is the other phone compared to the direction I'm facing?
+        // 0° = straight ahead, 90° = to my right, -90° = to my left
+        const relativeAngle = (lastBearing - myHeading + 360) % 360;
+        angleEl.textContent = Math.round(relativeAngle);
+        arrowEl.style.transform = `rotate(${relativeAngle}deg)`;
+      } else {
+        // No heading available — fall back to absolute bearing
+        angleEl.textContent = Math.round(lastBearing) + " (צפון)";
+        arrowEl.style.transform = `rotate(${lastBearing}deg)`;
+      }
+    }
 
     // ─── Math helpers ─────────────────────────────────────────────────
     function haversineDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371000; // meters
+      const R = 6371000;
       const φ1 = lat1 * Math.PI / 180;
       const φ2 = lat2 * Math.PI / 180;
       const Δφ = (lat2 - lat1) * Math.PI / 180;
