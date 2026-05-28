@@ -202,6 +202,38 @@
       text-align: center;
       max-width: 340px;
     }
+
+    #record-btn {
+      margin-top: 20px;
+      padding: 14px 32px;
+      background: #22c55e;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: background 0.2s, transform 0.1s;
+      width: 100%;
+      max-width: 340px;
+    }
+    #record-btn:active { transform: scale(0.96); }
+    #record-btn.recording {
+      background: #ef4444;
+      animation: rec-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes rec-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.75; }
+    }
+
+    #record-count {
+      font-size: 0.78rem;
+      color: #6b6b9a;
+      margin-top: 8px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -279,6 +311,9 @@
 
   <div id="log">ממתין לנתונים...</div>
 
+  <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
+  <div id="record-count"></div>
+
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
     const socket = io();
@@ -301,7 +336,63 @@
     const calOtherEl   = document.getElementById("cal-other");
     const calCompassEl = document.getElementById("cal-compass");
 
-    let myLat = null, myLng = null;
+    const recordBtn      = document.getElementById("record-btn");
+    const recordCountEl  = document.getElementById("record-count");
+
+    let isRecording = false;
+    let recordedData = [];
+
+    function toggleRecording() {
+      if (!isRecording) {
+        // Start recording
+        isRecording = true;
+        recordedData = [];
+        recordBtn.textContent = "⏹ עצור הקלטה";
+        recordBtn.classList.add("recording");
+        recordCountEl.textContent = "מקליט... 0 נקודות";
+      } else {
+        // Stop and download
+        isRecording = false;
+        recordBtn.textContent = "⏺ התחל הקלטה";
+        recordBtn.classList.remove("recording");
+        recordCountEl.textContent = "";
+        downloadCSV();
+      }
+    }
+
+    function logDataPoint() {
+      if (!isRecording) return;
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("he-IL", { hour12: false }) +
+                      "." + String(now.getMilliseconds()).padStart(3, "0");
+      const dist = distanceEl.textContent;
+      const ang  = angleEl.textContent;
+      if (dist === "--" || ang === "--") return;
+      recordedData.push({ time: timeStr, distance: dist, angle: ang });
+      recordCountEl.textContent = `מקליט... ${recordedData.length} נקודות`;
+    }
+
+    function downloadCSV() {
+      if (recordedData.length === 0) {
+        recordCountEl.textContent = "אין נתונים להורדה";
+        return;
+      }
+      const header = "זמן,מרחק,זווית\n";
+      const rows = recordedData.map(r => `${r.time},${r.distance},${r.angle}`).join("\n");
+      const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const dateStr = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+      a.href     = url;
+      a.download = `location-track-${dateStr}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      recordCountEl.textContent = `הורד קובץ עם ${recordedData.length} נקודות ✓`;
+    }
+
+    
     let myHeading = null;
     let lastBearing = null;
 
@@ -463,7 +554,6 @@
 
       if (myHeading !== null) {
         const rawRelative = (lastBearing - myHeading + 360) % 360;
-        // Apply calibration offset so "pointing at other phone" = 0°
         const displayAngle = (rawRelative - calibrationOffset + 360) % 360;
         angleEl.textContent = Math.round(displayAngle);
         arrowEl.style.transform = `rotate(${displayAngle}deg)`;
@@ -471,6 +561,8 @@
         angleEl.textContent = Math.round(lastBearing) + " (צפון)";
         arrowEl.style.transform = `rotate(${lastBearing}deg)`;
       }
+
+      logDataPoint();
     }
 
     // ─── Math helpers ─────────────────────────────────────────────────
