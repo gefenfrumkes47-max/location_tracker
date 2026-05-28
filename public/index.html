@@ -309,6 +309,29 @@
     <button class="small-btn" onclick="showCalibrationOverlay()">כייל מחדש</button>
   </div>
 
+  <!-- Tilt -->
+  <div class="card">
+    <h2>הטיית הטלפון השני (שמאל / ימין)</h2>
+    <div>
+      <span class="value" id="tilt">--</span>
+      <span class="unit">°</span>
+    </div>
+    <div id="tilt-status" style="font-size:0.75rem;color:#6b6b9a;margin-top:6px;">
+      ממתין לנתוני הטלפון השני...
+    </div>
+    <div style="margin-top:14px; display:flex; justify-content:center;">
+      <svg id="tilt-svg" viewBox="0 0 140 60" width="140" height="60" xmlns="http://www.w3.org/2000/svg">
+        <rect x="5" y="26" width="130" height="8" rx="4" fill="#2d2d4e"/>
+        <line x1="70" y1="18" x2="70" y2="42" stroke="#4b5563" stroke-width="1.5"/>
+        <g id="tilt-phone" transform="translate(70,30)">
+          <rect x="-10" y="-16" width="20" height="32" rx="4" fill="#a78bfa"/>
+          <rect x="-6" y="-12" width="12" height="22" rx="2" fill="#0f0f1a"/>
+          <circle cx="0" cy="13" r="2.5" fill="#6b6b9a"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+
   <div id="log">ממתין לנתונים...</div>
 
   <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
@@ -335,6 +358,10 @@
     const calGpsEl     = document.getElementById("cal-gps");
     const calOtherEl   = document.getElementById("cal-other");
     const calCompassEl = document.getElementById("cal-compass");
+
+    const tiltEl       = document.getElementById("tilt");
+    const tiltStatusEl = document.getElementById("tilt-status");
+    const tiltPhoneEl  = document.getElementById("tilt-phone");
 
     const recordBtn      = document.getElementById("record-btn");
     const recordCountEl  = document.getElementById("record-count");
@@ -367,8 +394,9 @@
                       "." + String(now.getMilliseconds()).padStart(3, "0");
       const dist = distanceEl.textContent;
       const ang  = angleEl.textContent;
+      const tlt  = tiltEl.textContent;
       if (dist === "--" || ang === "--") return;
-      recordedData.push({ time: timeStr, distance: dist, angle: ang });
+      recordedData.push({ time: timeStr, distance: dist, angle: ang, tilt: tlt });
       recordCountEl.textContent = `מקליט... ${recordedData.length} נקודות`;
     }
 
@@ -377,8 +405,8 @@
         recordCountEl.textContent = "אין נתונים להורדה";
         return;
       }
-      const header = "זמן,מרחק,זווית\n";
-      const rows = recordedData.map(r => `${r.time},${r.distance},${r.angle}`).join("\n");
+      const header = "זמן,מרחק,זווית,הטייה\n";
+      const rows = recordedData.map(r => `${r.time},${r.distance},${r.angle},${r.tilt}`).join("\n");
       const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
@@ -395,6 +423,8 @@
     
     let myHeading = null;
     let lastBearing = null;
+    let myTilt = null;      // gamma of this phone — sent alongside location
+    let otherTilt = null;   // gamma received from the other device
 
     // Calibration offset: how many degrees to subtract from the raw relative angle
     // When user calibrates pointing directly at the other phone,
@@ -461,7 +491,7 @@
           myLat = pos.coords.latitude;
           myLng = pos.coords.longitude;
           myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
-          socket.emit("send-location", { lat: myLat, lng: myLng });
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
           updateCalReadiness();
         },
         (err) => {
@@ -498,6 +528,10 @@
         headingStatusEl.textContent = `כיוון: ${Math.round(heading)}° מצפון`;
         updateCalReadiness();
         updateArrow();
+      }
+      // Capture left/right tilt (gamma: -90 left .. 0 flat .. +90 right)
+      if (event.gamma !== null && event.gamma !== undefined) {
+        myTilt = Math.round(event.gamma);
       }
     }
 
@@ -543,6 +577,20 @@
         : (dist / 1000).toFixed(2) + " ק״מ";
 
       document.querySelector('.unit').textContent = dist < 1000 ? "מטרים" : "";
+
+      // Update tilt from other phone
+      if (data.tilt !== null && data.tilt !== undefined) {
+        otherTilt = data.tilt;
+        tiltEl.textContent = otherTilt;
+        const dir = otherTilt < -5 ? "שמאל" : otherTilt > 5 ? "ימין" : "ישר";
+        tiltStatusEl.textContent = `${Math.abs(otherTilt)}° ל${dir}`;
+        // Slide the phone icon: 0° → x=70 (centre), ±90° → full width (±60px from centre)
+        const x = 70 + Math.round((otherTilt / 90) * 60);
+        tiltPhoneEl.setAttribute("transform", `translate(${x},30) rotate(${otherTilt})`);
+      } else {
+        tiltEl.textContent = "--";
+        tiltStatusEl.textContent = "הטלפון השני לא שולח נתוני הטייה";
+      }
 
       updateCalReadiness();
       updateArrow();
