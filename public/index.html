@@ -208,6 +208,25 @@
     @keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:0.75} }
 
     #record-count { font-size: 0.78rem; color: #6b6b9a; margin-top: 8px; text-align: center; }
+
+    /* ── Mute button ── */
+    #mute-btn {
+      margin-top: 12px; padding: 12px 24px;
+      background: #1a1a2e; color: #a78bfa;
+      border: 1px solid #a78bfa; border-radius: 12px;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      width: 100%; max-width: 340px;
+      transition: background 0.2s, color 0.2s;
+      letter-spacing: 0.03em;
+    }
+    #mute-btn.muted {
+      background: #1a1a2e; color: #4b5563;
+      border-color: #2d2d4e;
+    }
+    #audio-status {
+      font-size: 0.72rem; color: #4b5563;
+      margin-top: 6px; text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -341,6 +360,9 @@
 
   <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
   <div id="record-count"></div>
+
+  <button id="mute-btn" onclick="toggleMute()">🔊 השמע חיווי קולי</button>
+  <div id="audio-status">כבוי — לחץ להפעלה</div>
 
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
@@ -751,6 +773,114 @@
       const y  = Math.sin(Δλ) * Math.cos(φ2);
       const x  = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
       return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    }
+
+    // ── Audio engine ──────────────────────────────────────────────────
+    // Beeps at HIGH freq when other phone tilt > 0, LOW freq when tilt < 0.
+    // Volume scales with proximity: loud when close (few metres), quiet when far (~150m).
+    // Nothing plays when: muted, no other phone connected, tilt == 0.
+
+    const muteBtn     = document.getElementById("mute-btn");
+    const audioStatus = document.getElementById("audio-status");
+
+    let audioCtx      = null;   // created on first unmute (requires user gesture)
+    let isMuted       = true;   // start OFF — user must opt in
+    let beepInterval  = null;   // setInterval handle
+    let isBeeping     = false;  // guard against overlapping beeps
+
+    // Frequency mapping
+    const FREQ_HIGH = 1400;   // Hz — positive tilt
+    const FREQ_LOW  =  320;   // Hz — negative tilt
+    const BEEP_DUR  =  120;   // ms — each beep duration
+    const BEEP_GAP  =  350;   // ms — interval between beep starts
+
+    // Distance → volume curve
+    // At 0 m  → gain 1.0 (max)
+    // At 150 m → gain 0.03 (barely audible)
+    // Uses inverse-square-ish curve clamped to [0.03, 1.0]
+    function distanceToGain(metres) {
+      if (metres === null || metres === undefined) return 0;
+      const clamped = Math.max(1, metres);           // avoid div-by-zero
+      // gain = 1 / (1 + k*d)  — tuned so 150m → ~0.03
+      const k = (1 / 0.03 - 1) / 150;               // ≈ 0.218
+      return Math.min(1.0, 1 / (1 + k * clamped));
+    }
+
+    function playBeep(freq, gain) {
+      if (!audioCtx || isBeeping) return;
+      isBeeping = true;
+      const osc  = audioCtx.createOscillator();
+      const amp  = audioCtx.createGain();
+      osc.connect(amp);
+      amp.connect(audioCtx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      // Quick fade-in + fade-out to avoid clicks
+      amp.gain.setValueAtTime(0, audioCtx.currentTime);
+      amp.gain.linearRampToValueAtTime(gain, audioCtx.currentTime + 0.01);
+      amp.gain.setValueAtTime(gain, audioCtx.currentTime + BEEP_DUR / 1000 - 0.02);
+      amp.gain.linearRampToValueAtTime(0,    audioCtx.currentTime + BEEP_DUR / 1000);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + BEEP_DUR / 1000);
+      osc.onended = () => { isBeeping = false; };
+    }
+
+    function startBeeping() {
+      if (beepInterval) return;
+      beepInterval = setInterval(() => {
+        if (isMuted) return;
+        if (otherTilt === null) return;           // no other phone yet
+        if (otherTilt === 0) return;              // flat — no beep
+
+        // Get current distance in metres
+        let metres = null;
+        const dTxt = distanceEl.textContent;
+        const uTxt = distUnitEl.textContent;
+        if (dTxt !== "--") {
+          metres = parseFloat(dTxt);
+          if (uTxt === "ק״מ") metres *= 1000;
+        }
+
+        const freq = otherTilt > 0 ? FREQ_HIGH : FREQ_LOW;
+        const gain = distanceToGain(metres);
+
+        playBeep(freq, gain);
+        updateAudioStatus(freq, gain, metres);
+      }, BEEP_GAP);
+    }
+
+    function stopBeeping() {
+      if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+    }
+
+    function updateAudioStatus(freq, gain, metres) {
+      if (isMuted) { audioStatus.textContent = "כבוי"; return; }
+      if (otherTilt === null) { audioStatus.textContent = "פעיל — ממתין לטלפון שני"; return; }
+      const dir    = otherTilt > 0 ? "גבוה" : otherTilt < 0 ? "נמוך" : "שקט";
+      const volPct = Math.round((gain ?? 0) * 100);
+      const distTxt = metres !== null ? `${Math.round(metres)} מ׳` : "--";
+      audioStatus.textContent = `תדר: ${dir} (${freq ?? "--"} Hz) | עוצמה: ${volPct}% | מרחק: ${distTxt}`;
+    }
+
+    function toggleMute() {
+      if (isMuted) {
+        // First activation — create AudioContext (requires user gesture)
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        isMuted = false;
+        muteBtn.textContent = "🔇 השתק חיווי קולי";
+        muteBtn.classList.remove("muted");
+        audioStatus.textContent = "פעיל — ממתין לטלפון שני";
+        startBeeping();
+      } else {
+        isMuted = true;
+        muteBtn.textContent = "🔊 השמע חיווי קולי";
+        muteBtn.classList.add("muted");
+        audioStatus.textContent = "כבוי";
+        stopBeeping();
+      }
     }
 
     // Initial log render
