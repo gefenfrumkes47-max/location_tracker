@@ -194,6 +194,57 @@
     #log-box .log-val.dim { color: #4b5563; font-weight: 400; }
     #log-box .log-section { color: #2d2d4e; font-size: 0.62rem; margin: 4px 0 2px; letter-spacing: 0.08em; }
 
+    /* ── Wind type selector ── */
+    .wind-section {
+      width: 100%;
+      max-width: 340px;
+      margin-bottom: 12px;
+    }
+    .wind-section-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b6b9a;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .wind-btn-group {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .wind-btn {
+      flex: 1;
+      padding: 11px 8px;
+      background: #1a1a2e;
+      color: #9ca3af;
+      border: 1px solid #2d2d4e;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, border-color 0.18s;
+      text-align: center;
+    }
+    .wind-btn:active { transform: scale(0.96); }
+    .wind-btn.selected-blue {
+      background: #1e3a5f;
+      color: #60a5fa;
+      border-color: #3b82f6;
+    }
+    .wind-btn.selected-green {
+      background: #14532d;
+      color: #4ade80;
+      border-color: #22c55e;
+    }
+    .wind-required-hint {
+      font-size: 0.7rem;
+      color: #ef4444;
+      text-align: center;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
     /* record button */
     #record-btn {
       margin-top: 12px; padding: 14px 32px;
@@ -358,6 +409,27 @@
     <div class="log-row" style="flex-wrap:wrap;"><span class="log-val dim" id="ll-event" style="text-align:right;width:100%;"></span></div>
   </div>
 
+  <!-- ── Wind type selector ── -->
+  <div class="wind-section">
+    <div class="wind-section-label">כיוון המפנה</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-left"  onclick="selectWindDir('מפנה_שמאלי')">מפנה שמאלי</button>
+      <button class="wind-btn" id="wind-right" onclick="selectWindDir('מפנה_ימני')">מפנה ימני</button>
+    </div>
+  </div>
+
+  <div class="wind-section">
+    <div class="wind-section-label">סוג הרוח</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-back"  onclick="selectWindType('גבית')">גבית</button>
+      <button class="wind-btn" id="wind-front" onclick="selectWindType('קדמית')">קדמית</button>
+      <button class="wind-btn" id="wind-side"  onclick="selectWindType('צד')">צד</button>
+      <button class="wind-btn" id="wind-full"  onclick="selectWindType('מלאה')">מלאה</button>
+    </div>
+  </div>
+
+  <div class="wind-required-hint" id="wind-hint"></div>
+
   <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
   <div id="record-count"></div>
 
@@ -423,6 +495,30 @@
     let isCalibrated = false;
     let isRecording = false;
     let recordedData = [];
+
+    // Wind type state
+    let selectedWindDir  = null;   // 'מפנה_שמאלי' | 'מפנה_ימני'
+    let selectedWindType = null;   // 'גבית' | 'קדמית' | 'צד' | 'מלאה'
+
+    // ── Wind selector functions ───────────────────────────────────────
+    function selectWindDir(val) {
+      selectedWindDir = val;
+      document.getElementById('wind-left').classList.remove('selected-blue');
+      document.getElementById('wind-right').classList.remove('selected-blue');
+      const id = val === 'מפנה_שמאלי' ? 'wind-left' : 'wind-right';
+      document.getElementById(id).classList.add('selected-blue');
+      document.getElementById('wind-hint').textContent = '';
+    }
+
+    function selectWindType(val) {
+      selectedWindType = val;
+      ['wind-back','wind-front','wind-side','wind-full'].forEach(id =>
+        document.getElementById(id).classList.remove('selected-green')
+      );
+      const map = { 'גבית':'wind-back', 'קדמית':'wind-front', 'צד':'wind-side', 'מלאה':'wind-full' };
+      document.getElementById(map[val]).classList.add('selected-green');
+      document.getElementById('wind-hint').textContent = '';
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────
     function nowStr() {
@@ -494,6 +590,14 @@
     // ── Recording ────────────────────────────────────────────────────
     function toggleRecording() {
       if (!isRecording) {
+        // Validate wind selections
+        if (!selectedWindDir || !selectedWindType) {
+          document.getElementById('wind-hint').textContent =
+            !selectedWindDir && !selectedWindType ? 'יש לבחור כיוון מפנה וסוג רוח לפני ההקלטה' :
+            !selectedWindDir ? 'יש לבחור כיוון מפנה לפני ההקלטה' :
+            'יש לבחור סוג רוח לפני ההקלטה';
+          return;
+        }
         isRecording = true;
         recordedData = [];
         recordBtn.textContent = "⏹ עצור הקלטה";
@@ -515,6 +619,8 @@
       // Log even if no other phone — record what we have
       recordedData.push({
         time:        nowStr(),
+        wind_dir:    selectedWindDir  || "",
+        wind_type:   selectedWindType || "",
         my_lat:      myLat  !== null ? myLat.toFixed(6)  : "",
         my_lng:      myLng  !== null ? myLng.toFixed(6)  : "",
         my_heading:  myHeading !== null ? Math.round(myHeading) : "",
@@ -530,15 +636,16 @@
 
     function downloadCSV() {
       if (recordedData.length === 0) { recordCountEl.textContent = "אין נתונים להורדה"; return; }
-      const header = "זמן,GPS_שלי_lat,GPS_שלי_lng,כיוון_צפון,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,הטיה_שני,מרחק,זווית\n";
+      const header = "זמן,כיוון_מפנה,סוג_רוח,GPS_שלי_lat,GPS_שלי_lng,כיוון_צפון,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,הטיה_שני,מרחק,זווית\n";
       const rows = recordedData.map(r =>
-        `${r.time},${r.my_lat},${r.my_lng},${r.my_heading},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_tilt},${r.distance},${r.angle}`
+        `${r.time},${r.wind_dir},${r.wind_type},${r.my_lat},${r.my_lng},${r.my_heading},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_tilt},${r.distance},${r.angle}`
       ).join("\n");
       const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       const dateStr = new Date().toISOString().slice(0,19).replace(/[T:]/g, "-");
-      a.href = url; a.download = `location-track-${dateStr}.csv`;
+      const windTag = [selectedWindDir, selectedWindType].filter(Boolean).join("_");
+      a.href = url; a.download = `location-track-${windTag ? windTag + "-" : ""}${dateStr}.csv`;
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
       recordCountEl.textContent = `הורד קובץ עם ${recordedData.length} נקודות ✓`;
