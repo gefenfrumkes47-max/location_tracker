@@ -495,6 +495,7 @@
     let isCalibrated = false;
     let isRecording = false;
     let recordedData = [];
+    let recordInterval = null;
 
     // Wind type state
     let selectedWindDir  = null;   // 'מפנה_שמאלי' | 'מפנה_ימני'
@@ -603,8 +604,11 @@
         recordBtn.textContent = "⏹ עצור הקלטה";
         recordBtn.classList.add("recording");
         recordCountEl.textContent = "מקליט... 0 נקודות";
+        recordInterval = setInterval(logDataPoint, 200); // 5 Hz
       } else {
         isRecording = false;
+        clearInterval(recordInterval);
+        recordInterval = null;
         recordBtn.textContent = "⏺ התחל הקלטה";
         recordBtn.classList.remove("recording");
         recordCountEl.textContent = "";
@@ -710,7 +714,6 @@
           socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
           updateCalReadiness();
           refreshLog("GPS עודכן");
-          logDataPoint();
         },
         (err) => {
           myLocationEl.textContent = "שגיאה: " + err.message;
@@ -767,7 +770,6 @@
       animateTiltPhone(myTiltPhoneEl, myTilt);
       myTiltColEl.classList.remove("unavailable");
       refreshLog(); // keep log fresh with new tilt
-      logDataPoint();
     }
 
     function requestCompassPermission() {
@@ -839,7 +841,6 @@
       updateArrow();
 
       refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} | מרחק: ${distFmt}`);
-      logDataPoint();
     });
 
     function updateOtherTiltDisplay() {
