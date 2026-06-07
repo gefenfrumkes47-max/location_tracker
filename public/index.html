@@ -563,16 +563,19 @@
     // Returns the display value: positive = right, negative = left, 0 = centre.
     function applyHysteresis(avg) {
       if (tiltSide === 0) {
+        // Initial state — first time we cross ±5° we commit to that side
         if (avg >  TILT_HYSTERESIS) tiltSide =  1;
         if (avg < -TILT_HYSTERESIS) tiltSide = -1;
       } else if (tiltSide === 1) {
+        // Currently right — only flip to left if avg drops below -5°
         if (avg < -TILT_HYSTERESIS) tiltSide = -1;
-        else if (avg < 0)           tiltSide =  0;
+        // Never return to 0 once a side is established
       } else {  // tiltSide === -1
+        // Currently left — only flip to right if avg rises above +5°
         if (avg >  TILT_HYSTERESIS) tiltSide =  1;
-        else if (avg > 0)           tiltSide =  0;
+        // Never return to 0 once a side is established
       }
-      return avg;   // we return raw avg; side is stored in tiltSide for audio/display
+      return avg;
     }
 
     // Move a tilt phone SVG element
@@ -900,10 +903,8 @@
         if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
       } else if (otherTiltSide === 1) {
         if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
-        else if (otherTilt < 0)           otherTiltSide =  0;
       } else {
         if (otherTilt >  TILT_HYSTERESIS) otherTiltSide =  1;
-        else if (otherTilt > 0)           otherTiltSide =  0;
       }
       otherTiltValEl.textContent = typeof otherTilt === "number" ? otherTilt.toFixed(1) : otherTilt;
       const sideLabel = otherTiltSide === 1 ? "ימין ✓" : otherTiltSide === -1 ? "שמאל ✓" : "ישר";
