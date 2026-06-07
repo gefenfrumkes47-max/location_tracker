@@ -745,6 +745,27 @@
       statusText.textContent = "מנותק";
       refreshLog("התנתק מהשרת");
     });
+    socket.on("server-full", (data) => {
+      dot.classList.remove("connected");
+      statusText.textContent = "⛔ " + (data.message || "השרת מלא");
+      refreshLog("חיבור נדחה — השרת מלא");
+    });
+    socket.on("device-count", (data) => {
+      const count = data.count || 0;
+      const label = count === 1 ? "מכשיר אחד מחובר" : `${count} מכשירים מחוברים`;
+      if (!statusText.textContent.startsWith("⛔")) {
+        statusText.textContent = `מחובר לשרת ✓ (${label})`;
+      }
+    });
+
+    // Re-resume AudioContext when page becomes visible again (iOS kills it in bg)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && audioCtx && !isMuted) {
+        audioCtx.resume().then(() => {
+          if (!beepLoopActive) startBeeping();
+        }).catch(() => {});
+      }
+    });
 
     // ── GPS ───────────────────────────────────────────────────────────
     let myLat_ = null; // alias kept for closure; we use myLat/myLng directly
@@ -947,82 +968,127 @@
     }
 
     // ── Audio engine ──────────────────────────────────────────────────
-    // Beeps at HIGH freq when other phone tilt > 0, LOW freq when tilt < 0.
-    // Volume scales with proximity: loud when close (few metres), quiet when far (~150m).
-    // Nothing plays when: muted, no other phone connected, tilt == 0.
+    // Cross-platform (iOS Safari, Android Chrome, desktop).
+    //
+    // Strategy:
+    //  • AudioContext is created AND resumed inside the user-gesture handler
+    //    (toggleMute), satisfying iOS autoplay policy.
+    //  • Instead of setInterval we use Web Audio API self-scheduling:
+    //    each beep schedules the next one via osc.onended, keeping precise
+    //    timing and avoiding the "missed tick" problem of setInterval on mobile.
+    //  • We call audioCtx.resume() before every beep chain in case the browser
+    //    suspended the context in the background (iOS does this).
+    //  • A MasterGain node lets us silence instantly on mute without cancelling
+    //    scheduled nodes (avoids click artefacts).
 
     const muteBtn     = document.getElementById("mute-btn");
     const audioStatus = document.getElementById("audio-status");
 
-    let audioCtx      = null;   // created on first unmute (requires user gesture)
-    let isMuted       = true;   // start OFF — user must opt in
-    let beepInterval  = null;   // setInterval handle
-    let isBeeping     = false;  // guard against overlapping beeps
+    let audioCtx      = null;
+    let masterGain    = null;   // master volume gate
+    let isMuted       = true;
+    let beepLoopActive = false; // true while the self-scheduling loop is running
 
     // Frequency mapping
-    const FREQ_HIGH = 1400;   // Hz — positive tilt
-    const FREQ_LOW  =  320;   // Hz — negative tilt
-    const BEEP_DUR  =  120;   // ms — each beep duration
-    const BEEP_GAP  =  350;   // ms — interval between beep starts
+    const FREQ_HIGH = 1400;   // Hz — positive tilt (right)
+    const FREQ_LOW  =  320;   // Hz — negative tilt (left)
+    const BEEP_DUR  =  0.12;  // seconds
+    const BEEP_GAP  =  0.35;  // seconds between beep starts
 
-    // Distance → volume curve
-    // At 0 m  → gain 1.0 (max)
-    // At 150 m → gain 0.03 (barely audible)
-    // Uses inverse-square-ish curve clamped to [0.03, 1.0]
+    // Distance → gain curve: 0 m → 1.0, 150 m → ~0.03
     function distanceToGain(metres) {
       if (metres === null || metres === undefined) return 0;
-      const clamped = Math.max(1, metres);           // avoid div-by-zero
-      // gain = 1 / (1 + k*d)  — tuned so 150m → ~0.03
-      const k = (1 / 0.03 - 1) / 150;               // ≈ 0.218
-      return Math.min(1.0, 1 / (1 + k * clamped));
+      const k = (1 / 0.03 - 1) / 150; // ≈ 0.218
+      return Math.min(1.0, 1 / (1 + k * Math.max(1, metres)));
     }
 
-    function playBeep(freq, gain) {
-      if (!audioCtx || isBeeping) return;
-      isBeeping = true;
-      const osc  = audioCtx.createOscillator();
-      const amp  = audioCtx.createGain();
-      osc.connect(amp);
-      amp.connect(audioCtx.destination);
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      // Quick fade-in + fade-out to avoid clicks
-      amp.gain.setValueAtTime(0, audioCtx.currentTime);
-      amp.gain.linearRampToValueAtTime(gain, audioCtx.currentTime + 0.01);
-      amp.gain.setValueAtTime(gain, audioCtx.currentTime + BEEP_DUR / 1000 - 0.02);
-      amp.gain.linearRampToValueAtTime(0,    audioCtx.currentTime + BEEP_DUR / 1000);
-      osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime + BEEP_DUR / 1000);
-      osc.onended = () => { isBeeping = false; };
+    function getCurrentMetres() {
+      const dTxt = distanceEl.textContent;
+      const uTxt = distUnitEl.textContent;
+      if (dTxt === "--") return null;
+      let m = parseFloat(dTxt);
+      if (uTxt === "ק״מ") m *= 1000;
+      return isNaN(m) ? null : m;
+    }
+
+    // Ensure AudioContext is running; safe to call from non-gesture context.
+    function ensureAudioReady() {
+      if (!audioCtx) return false;
+      // resume() returns a Promise; we don't need to await it here —
+      // the next scheduled beep will land after it resolves.
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+      return audioCtx.state !== "closed";
+    }
+
+    // Play one beep and schedule the next one via onended.
+    function scheduleBeep() {
+      if (isMuted || !beepLoopActive) { beepLoopActive = false; return; }
+      if (!ensureAudioReady()) { beepLoopActive = false; return; }
+      if (otherTilt === null || otherTiltSide === 0) {
+        // No data yet — check again after one gap
+        const resumeTimer = setTimeout(() => {
+          if (!isMuted && beepLoopActive) scheduleBeep();
+        }, BEEP_GAP * 1000);
+        return;
+      }
+
+      const metres = getCurrentMetres();
+      const gain   = distanceToGain(metres);
+      const freq   = otherTiltSide > 0 ? FREQ_HIGH : FREQ_LOW;
+
+      try {
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const amp = audioCtx.createGain();
+
+        osc.connect(amp);
+        amp.connect(masterGain);
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, now);
+
+        // Smooth envelope to avoid clicks
+        amp.gain.setValueAtTime(0, now);
+        amp.gain.linearRampToValueAtTime(gain, now + 0.012);
+        amp.gain.setValueAtTime(gain, now + BEEP_DUR - 0.025);
+        amp.gain.linearRampToValueAtTime(0, now + BEEP_DUR);
+
+        osc.start(now);
+        osc.stop(now + BEEP_DUR);
+
+        osc.onended = () => {
+          osc.disconnect();
+          amp.disconnect();
+          if (!isMuted && beepLoopActive) {
+            // Schedule next beep after the gap
+            const delay = Math.max(0, (BEEP_GAP - BEEP_DUR) * 1000);
+            setTimeout(scheduleBeep, delay);
+          } else {
+            beepLoopActive = false;
+          }
+        };
+
+        updateAudioStatus(freq, gain, metres);
+      } catch (e) {
+        // AudioContext in bad state — retry after gap
+        setTimeout(() => { if (!isMuted && beepLoopActive) scheduleBeep(); }, BEEP_GAP * 1000);
+      }
     }
 
     function startBeeping() {
-      if (beepInterval) return;
-      beepInterval = setInterval(() => {
-        if (isMuted) return;
-        if (otherTilt === null) return;           // no other phone yet
-        if (otherTiltSide === 0) return;          // hysteresis says: centre — no beep
-
-        // Get current distance in metres
-        let metres = null;
-        const dTxt = distanceEl.textContent;
-        const uTxt = distUnitEl.textContent;
-        if (dTxt !== "--") {
-          metres = parseFloat(dTxt);
-          if (uTxt === "ק״מ") metres *= 1000;
-        }
-
-        // Use hysteresis-confirmed side, not raw sign
-        const freq = otherTiltSide > 0 ? FREQ_HIGH : FREQ_LOW;
-        const gain = distanceToGain(metres);
-
-        playBeep(freq, gain);
-        updateAudioStatus(freq, gain, metres);
-      }, BEEP_GAP);
+      if (beepLoopActive) return;
+      beepLoopActive = true;
+      scheduleBeep();
     }
 
     function stopBeeping() {
-      if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+      beepLoopActive = false;
+      // Instantly silence via master gain (no click)
+      if (masterGain && audioCtx) {
+        masterGain.gain.setValueAtTime(0, audioCtx.currentTime);
+      }
     }
 
     function updateAudioStatus(freq, gain, metres) {
@@ -1031,22 +1097,45 @@
       const dir    = otherTiltSide > 0 ? "גבוה" : otherTiltSide < 0 ? "נמוך" : "שקט";
       const volPct = Math.round((gain ?? 0) * 100);
       const distTxt = metres !== null ? `${Math.round(metres)} מ׳` : "--";
-      audioStatus.textContent = `תדר: ${dir} (${freq ?? "--"} Hz) | עוצמה: ${volPct}% | מרחק: ${distTxt}`;
+      audioStatus.textContent = `תדר: ${dir} (${freq} Hz) | עוצמה: ${volPct}% | מרחק: ${distTxt}`;
     }
 
     function toggleMute() {
       if (isMuted) {
-        // First activation — create AudioContext (requires user gesture)
+        // ── UNMUTE ──
+        // Create AudioContext inside this user-gesture handler — mandatory for iOS.
         if (!audioCtx) {
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          } catch (e) {
+            audioStatus.textContent = "שגיאה: הדפדפן לא תומך ב-Web Audio";
+            return;
+          }
+          masterGain = audioCtx.createGain();
+          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          masterGain.connect(audioCtx.destination);
         }
-        if (audioCtx.state === "suspended") audioCtx.resume();
-        isMuted = false;
-        muteBtn.textContent = "🔇 השתק חיווי קולי";
-        muteBtn.classList.remove("muted");
-        audioStatus.textContent = "פעיל — ממתין לטלפון שני";
-        startBeeping();
+
+        // Always resume — iOS may have suspended the context
+        const activate = () => {
+          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          isMuted = false;
+          muteBtn.textContent    = "🔇 השתק חיווי קולי";
+          muteBtn.classList.remove("muted");
+          audioStatus.textContent = "פעיל — ממתין לטלפון שני";
+          startBeeping();
+        };
+
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume().then(activate).catch(() => {
+            audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
+          });
+        } else {
+          activate();
+        }
+
       } else {
+        // ── MUTE ──
         isMuted = true;
         muteBtn.textContent = "🔊 השמע חיווי קולי";
         muteBtn.classList.add("muted");
