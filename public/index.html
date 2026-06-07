@@ -194,6 +194,57 @@
     #log-box .log-val.dim { color: #4b5563; font-weight: 400; }
     #log-box .log-section { color: #2d2d4e; font-size: 0.62rem; margin: 4px 0 2px; letter-spacing: 0.08em; }
 
+    /* ── Wind type selector ── */
+    .wind-section {
+      width: 100%;
+      max-width: 340px;
+      margin-bottom: 12px;
+    }
+    .wind-section-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b6b9a;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .wind-btn-group {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .wind-btn {
+      flex: 1;
+      padding: 11px 8px;
+      background: #1a1a2e;
+      color: #9ca3af;
+      border: 1px solid #2d2d4e;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, border-color 0.18s;
+      text-align: center;
+    }
+    .wind-btn:active { transform: scale(0.96); }
+    .wind-btn.selected-blue {
+      background: #1e3a5f;
+      color: #60a5fa;
+      border-color: #3b82f6;
+    }
+    .wind-btn.selected-green {
+      background: #14532d;
+      color: #4ade80;
+      border-color: #22c55e;
+    }
+    .wind-required-hint {
+      font-size: 0.7rem;
+      color: #ef4444;
+      text-align: center;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
     /* record button */
     #record-btn {
       margin-top: 12px; padding: 14px 32px;
@@ -358,6 +409,27 @@
     <div class="log-row" style="flex-wrap:wrap;"><span class="log-val dim" id="ll-event" style="text-align:right;width:100%;"></span></div>
   </div>
 
+  <!-- ── Wind type selector ── -->
+  <div class="wind-section">
+    <div class="wind-section-label">כיוון המפנה</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-left"  onclick="selectWindDir('מפנה_שמאלי')">מפנה שמאלי</button>
+      <button class="wind-btn" id="wind-right" onclick="selectWindDir('מפנה_ימני')">מפנה ימני</button>
+    </div>
+  </div>
+
+  <div class="wind-section">
+    <div class="wind-section-label">סוג הרוח</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-back"  onclick="selectWindType('גבית')">גבית</button>
+      <button class="wind-btn" id="wind-front" onclick="selectWindType('קדמית')">קדמית</button>
+      <button class="wind-btn" id="wind-side"  onclick="selectWindType('צד')">צד</button>
+      <button class="wind-btn" id="wind-full"  onclick="selectWindType('מלאה')">מלאה</button>
+    </div>
+  </div>
+
+  <div class="wind-required-hint" id="wind-hint"></div>
+
   <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
   <div id="record-count"></div>
 
@@ -415,14 +487,47 @@
     // ── State ─────────────────────────────────────────────────────────
     let myLat = null, myLng = null;
     let myHeading = null;       // degrees from North
-    let myTilt = null;          // gamma (left/right tilt of this phone)
+    let myTilt = null;          // smoothed tilt (10s average, after hysteresis)
+    let myTiltRaw = null;       // latest raw gamma reading
+
+    // Rolling buffer: { value, ts } entries for the last 10 seconds
+    const TILT_WINDOW_MS = 10000;
+    const TILT_HYSTERESIS = 5;  // degrees — must cross ±5° to change side
+    let tiltBuffer = [];        // raw samples in the window
+    let tiltSide = 0;           // -1 left, 0 centre, +1 right (hysteresis state)
     let lastBearing = null;     // absolute bearing to other phone
-    let otherTilt = null;       // gamma received from other device
+    let otherTilt = null;       // smoothed gamma received from other device
+    let otherTiltSide = 0;      // hysteresis side for other phone (-1/0/+1)
     let otherLat = null, otherLng = null;
     let calibrationOffset = 0;
     let isCalibrated = false;
     let isRecording = false;
     let recordedData = [];
+    let recordInterval = null;
+
+    // Wind type state
+    let selectedWindDir  = null;   // 'מפנה_שמאלי' | 'מפנה_ימני'
+    let selectedWindType = null;   // 'גבית' | 'קדמית' | 'צד' | 'מלאה'
+
+    // ── Wind selector functions ───────────────────────────────────────
+    function selectWindDir(val) {
+      selectedWindDir = val;
+      document.getElementById('wind-left').classList.remove('selected-blue');
+      document.getElementById('wind-right').classList.remove('selected-blue');
+      const id = val === 'מפנה_שמאלי' ? 'wind-left' : 'wind-right';
+      document.getElementById(id).classList.add('selected-blue');
+      document.getElementById('wind-hint').textContent = '';
+    }
+
+    function selectWindType(val) {
+      selectedWindType = val;
+      ['wind-back','wind-front','wind-side','wind-full'].forEach(id =>
+        document.getElementById(id).classList.remove('selected-green')
+      );
+      const map = { 'גבית':'wind-back', 'קדמית':'wind-front', 'צד':'wind-side', 'מלאה':'wind-full' };
+      document.getElementById(map[val]).classList.add('selected-green');
+      document.getElementById('wind-hint').textContent = '';
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────
     function nowStr() {
@@ -431,11 +536,43 @@
              "." + String(n.getMilliseconds()).padStart(3, "0");
     }
 
+    // tiltDir uses the SMOOTHED value (already hysteresis-filtered)
     function tiltDir(deg) {
       if (deg === null || deg === undefined) return "--";
-      if (deg < -5) return `${Math.abs(deg)}° שמאל`;
-      if (deg >  5) return `${deg}° ימין`;
+      if (deg < 0) return `${Math.abs(deg)}° שמאל`;
+      if (deg > 0) return `${deg}° ימין`;
       return "ישר";
+    }
+
+    // ── Tilt smoothing helpers ────────────────────────────────────────
+    function pushTiltSample(raw) {
+      const now = Date.now();
+      tiltBuffer.push({ value: raw, ts: now });
+      // Drop samples older than the window
+      tiltBuffer = tiltBuffer.filter(s => now - s.ts <= TILT_WINDOW_MS);
+    }
+
+    function calcSmoothedTilt() {
+      if (tiltBuffer.length === 0) return null;
+      const avg = tiltBuffer.reduce((s, e) => s + e.value, 0) / tiltBuffer.length;
+      return Math.round(avg * 10) / 10;   // one decimal place
+    }
+
+    // Apply hysteresis to the smoothed average.
+    // tiltSide only flips when avg crosses ±TILT_HYSTERESIS from centre.
+    // Returns the display value: positive = right, negative = left, 0 = centre.
+    function applyHysteresis(avg) {
+      if (tiltSide === 0) {
+        if (avg >  TILT_HYSTERESIS) tiltSide =  1;
+        if (avg < -TILT_HYSTERESIS) tiltSide = -1;
+      } else if (tiltSide === 1) {
+        if (avg < -TILT_HYSTERESIS) tiltSide = -1;
+        else if (avg < 0)           tiltSide =  0;
+      } else {  // tiltSide === -1
+        if (avg >  TILT_HYSTERESIS) tiltSide =  1;
+        else if (avg > 0)           tiltSide =  0;
+      }
+      return avg;   // we return raw avg; side is stored in tiltSide for audio/display
     }
 
     // Move a tilt phone SVG element
@@ -494,13 +631,24 @@
     // ── Recording ────────────────────────────────────────────────────
     function toggleRecording() {
       if (!isRecording) {
+        // Validate wind selections
+        if (!selectedWindDir || !selectedWindType) {
+          document.getElementById('wind-hint').textContent =
+            !selectedWindDir && !selectedWindType ? 'יש לבחור כיוון מפנה וסוג רוח לפני ההקלטה' :
+            !selectedWindDir ? 'יש לבחור כיוון מפנה לפני ההקלטה' :
+            'יש לבחור סוג רוח לפני ההקלטה';
+          return;
+        }
         isRecording = true;
         recordedData = [];
         recordBtn.textContent = "⏹ עצור הקלטה";
         recordBtn.classList.add("recording");
         recordCountEl.textContent = "מקליט... 0 נקודות";
+        recordInterval = setInterval(logDataPoint, 200); // 5 Hz
       } else {
         isRecording = false;
+        clearInterval(recordInterval);
+        recordInterval = null;
         recordBtn.textContent = "⏺ התחל הקלטה";
         recordBtn.classList.remove("recording");
         recordCountEl.textContent = "";
@@ -515,6 +663,8 @@
       // Log even if no other phone — record what we have
       recordedData.push({
         time:        nowStr(),
+        wind_dir:    selectedWindDir  || "",
+        wind_type:   selectedWindType || "",
         my_lat:      myLat  !== null ? myLat.toFixed(6)  : "",
         my_lng:      myLng  !== null ? myLng.toFixed(6)  : "",
         my_heading:  myHeading !== null ? Math.round(myHeading) : "",
@@ -530,15 +680,16 @@
 
     function downloadCSV() {
       if (recordedData.length === 0) { recordCountEl.textContent = "אין נתונים להורדה"; return; }
-      const header = "זמן,GPS_שלי_lat,GPS_שלי_lng,כיוון_צפון,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,הטיה_שני,מרחק,זווית\n";
+      const header = "זמן,כיוון_מפנה,סוג_רוח,GPS_שלי_lat,GPS_שלי_lng,כיוון_צפון,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,הטיה_שני,מרחק,זווית\n";
       const rows = recordedData.map(r =>
-        `${r.time},${r.my_lat},${r.my_lng},${r.my_heading},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_tilt},${r.distance},${r.angle}`
+        `${r.time},${r.wind_dir},${r.wind_type},${r.my_lat},${r.my_lng},${r.my_heading},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_tilt},${r.distance},${r.angle}`
       ).join("\n");
       const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       const dateStr = new Date().toISOString().slice(0,19).replace(/[T:]/g, "-");
-      a.href = url; a.download = `location-track-${dateStr}.csv`;
+      const windTag = [selectedWindDir, selectedWindType].filter(Boolean).join("_");
+      a.href = url; a.download = `location-track-${windTag ? windTag + "-" : ""}${dateStr}.csv`;
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
       recordCountEl.textContent = `הורד קובץ עם ${recordedData.length} נקודות ✓`;
@@ -603,7 +754,6 @@
           socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
           updateCalReadiness();
           refreshLog("GPS עודכן");
-          logDataPoint();
         },
         (err) => {
           myLocationEl.textContent = "שגיאה: " + err.message;
@@ -645,9 +795,13 @@
 
       // Tilt (gamma): negative = leaning left, positive = leaning right
       if (event.gamma !== null && event.gamma !== undefined) {
-        myTilt = Math.round(event.gamma);
+        myTiltRaw = Math.round(event.gamma * 10) / 10;  // keep one decimal raw
+        pushTiltSample(myTiltRaw);
+        const avg = calcSmoothedTilt();
+        applyHysteresis(avg);                           // updates tiltSide
+        myTilt = avg;                                   // store smoothed value
         updateMyTiltDisplay();
-        // Re-emit location so tilt stays current
+        // Emit smoothed tilt so the other phone's audio uses clean data
         if (myLat !== null)
           socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
       }
@@ -655,11 +809,16 @@
 
     function updateMyTiltDisplay() {
       if (myTilt === null) return;
-      myTiltValEl.textContent = myTilt;
-      myTiltDirEl.textContent = tiltDir(myTilt);
+      // Main number = smoothed 10s average
+      myTiltValEl.textContent = myTilt.toFixed(1);
+      // Direction: hysteresis-confirmed side + raw reading in parentheses
+      const sideLabel = tiltSide === 1 ? "ימין ✓" : tiltSide === -1 ? "שמאל ✓" : "ישר";
+      const rawLabel  = myTiltRaw !== null ? ` (גולמי: ${myTiltRaw}°)` : "";
+      myTiltDirEl.textContent = `${sideLabel}${rawLabel}`;
+      // SVG animation uses the smoothed value
       animateTiltPhone(myTiltPhoneEl, myTilt);
       myTiltColEl.classList.remove("unavailable");
-      refreshLog(); // keep log fresh with new tilt
+      refreshLog();
       logDataPoint();
     }
 
@@ -732,12 +891,23 @@
       updateArrow();
 
       refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} | מרחק: ${distFmt}`);
-      logDataPoint();
     });
 
     function updateOtherTiltDisplay() {
-      otherTiltValEl.textContent = otherTilt;
-      otherTiltDirEl.textContent = tiltDir(otherTilt);
+      // Apply same hysteresis logic to the received smoothed value
+      if (otherTiltSide === 0) {
+        if (otherTilt >  TILT_HYSTERESIS) otherTiltSide =  1;
+        if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
+      } else if (otherTiltSide === 1) {
+        if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
+        else if (otherTilt < 0)           otherTiltSide =  0;
+      } else {
+        if (otherTilt >  TILT_HYSTERESIS) otherTiltSide =  1;
+        else if (otherTilt > 0)           otherTiltSide =  0;
+      }
+      otherTiltValEl.textContent = typeof otherTilt === "number" ? otherTilt.toFixed(1) : otherTilt;
+      const sideLabel = otherTiltSide === 1 ? "ימין ✓" : otherTiltSide === -1 ? "שמאל ✓" : "ישר";
+      otherTiltDirEl.textContent = sideLabel;
       animateTiltPhone(otherTiltPhoneEl, otherTilt);
       otherTiltColEl.classList.remove("unavailable");
     }
@@ -830,7 +1000,7 @@
       beepInterval = setInterval(() => {
         if (isMuted) return;
         if (otherTilt === null) return;           // no other phone yet
-        if (otherTilt === 0) return;              // flat — no beep
+        if (otherTiltSide === 0) return;          // hysteresis says: centre — no beep
 
         // Get current distance in metres
         let metres = null;
@@ -841,7 +1011,8 @@
           if (uTxt === "ק״מ") metres *= 1000;
         }
 
-        const freq = otherTilt > 0 ? FREQ_HIGH : FREQ_LOW;
+        // Use hysteresis-confirmed side, not raw sign
+        const freq = otherTiltSide > 0 ? FREQ_HIGH : FREQ_LOW;
         const gain = distanceToGain(metres);
 
         playBeep(freq, gain);
@@ -856,7 +1027,7 @@
     function updateAudioStatus(freq, gain, metres) {
       if (isMuted) { audioStatus.textContent = "כבוי"; return; }
       if (otherTilt === null) { audioStatus.textContent = "פעיל — ממתין לטלפון שני"; return; }
-      const dir    = otherTilt > 0 ? "גבוה" : otherTilt < 0 ? "נמוך" : "שקט";
+      const dir    = otherTiltSide > 0 ? "גבוה" : otherTiltSide < 0 ? "נמוך" : "שקט";
       const volPct = Math.round((gain ?? 0) * 100);
       const distTxt = metres !== null ? `${Math.round(metres)} מ׳` : "--";
       audioStatus.textContent = `תדר: ${dir} (${freq ?? "--"} Hz) | עוצמה: ${volPct}% | מרחק: ${distTxt}`;
