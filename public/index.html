@@ -941,6 +941,34 @@
     }
 
     // ── Device Orientation ────────────────────────────────────────────
+    let smoothedHeading = null;
+    const SMOOTHING_FACTOR = 0.04; // ההחלקה שהגדרנו לסירה
+    const MAX_ALLOWED_JUMP = 60;   // מקסימום מעלות שסירה יכולה להסתובב בשבריר שנייה (למשל 60 מעלות)
+
+    function filterHeading(newHeading) {
+      if (smoothedHeading === null) {
+        smoothedHeading = newHeading;
+        return smoothedHeading;
+      }
+
+      let diff = newHeading - smoothedHeading;
+      diff = (diff + 180) % 360 - 180;
+  
+      if (Math.abs(diff) > MAX_ALLOWED_JUMP) {
+        return smoothedHeading; 
+      }
+
+      const radNew = newHeading * Math.PI / 180;
+      const radOld = smoothedHeading * Math.PI / 180;
+
+      const Math_sin = Math.sin(radOld) * (1 - SMOOTHING_FACTOR) + Math.sin(radNew) * SMOOTHING_FACTOR;
+      const Math_cos = Math.cos(radOld) * (1 - SMOOTHING_FACTOR) + Math.cos(radNew) * SMOOTHING_FACTOR;
+
+      let avgHeading = Math.atan2(Math_sin, Math_cos) * 180 / Math.PI;
+      smoothedHeading = (avgHeading + 360) % 360;
+
+      return smoothedHeading;
+    }
     function startCompass() {
       if (window.DeviceOrientationEvent) {
         window.addEventListener("deviceorientationabsolute", handleOrientation, true);
@@ -962,7 +990,7 @@
       }
 
       if (heading !== null) {
-        myHeading = heading;
+        myHeading = filterHeading(heading);
         headingStatusEl.textContent = `כיוון: ${Math.round(heading)}° מצפון`;
         updateCalReadiness();
         updateArrow();       // updates angle card + arrow
