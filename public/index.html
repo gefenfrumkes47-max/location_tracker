@@ -296,7 +296,6 @@
       width: 100%; height: 6px;
       border-radius: 3px;
       background: linear-gradient(to right, #a78bfa 0%, #a78bfa var(--vol-pct, 80%), #2d2d4e var(--vol-pct, 80%), #2d2d4e 100%);
-      direction: ltr;
       outline: none; cursor: pointer;
     }
     #volume-slider::-webkit-slider-thumb {
@@ -476,7 +475,7 @@
       <span id="volume-display">80%</span>
       <span>🔊</span>
     </div>
-    <input type="range" id="volume-slider" min="0" max="100" value="80" style="direction:ltr" oninput="onVolumeChange(this.value)">
+    <input type="range" id="volume-slider" min="0" max="100" value="80" oninput="onVolumeChange(this.value)">
   </div>
 
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
@@ -810,132 +809,23 @@
       }
     });
 
-    // ── Kalman Filter for GPS ─────────────────────────────────────────
-    // State vector: [lat, lng, vLat, vLng]
-    // vLat/vLng = velocity in degrees/ms (tiny numbers, but consistent)
-    //
-    // We use a scalar 1-D Kalman per axis (lat and lng independently),
-    // which is sufficient for slow-moving boats where cross-axis correlation
-    // is negligible.
-
-    const GPS_PROCESS_NOISE  = 1e-9;   // how much we trust the motion model
-                                        // (higher → follows GPS more, less smoothing)
-    const GPS_MIN_MEAS_NOISE = 1e-8;   // floor measurement noise (perfect accuracy)
-    // Measurement noise scales with coords.accuracy:
-    // R = (accuracy_metres / 111320)² — converts metres to degrees²
-
-    function makePosFilter() {
-      return {
-        x:  null,   // position estimate (degrees)
-        v:  0,      // velocity estimate (degrees/ms)
-        p:  [[1e-4, 0], [0, 1e-6]],  // covariance: [pos,vel] 2×2
-      };
-    }
-
-    const kfLat = makePosFilter();
-    const kfLng = makePosFilter();
-
-    function kalmanUpdate(kf, measurement, dt, measNoise) {
-      // ── Predict ──
-      if (kf.x === null) {
-        // First measurement — just initialise
-        kf.x = measurement;
-        kf.v = 0;
-        return kf.x;
-      }
-
-      const xPred = kf.x + kf.v * dt;
-      const vPred = kf.v;                   // constant-velocity model
-      // Predicted covariance  P' = F P Fᵀ + Q
-      const q = GPS_PROCESS_NOISE;
-      const p00 = kf.p[0][0] + dt * (kf.p[1][0] + kf.p[0][1]) + dt * dt * kf.p[1][1] + q;
-      const p01 = kf.p[0][1] + dt * kf.p[1][1];
-      const p10 = kf.p[1][0] + dt * kf.p[1][1];
-      const p11 = kf.p[1][1] + q * 0.1;
-
-      // ── Update ──
-      const R  = Math.max(GPS_MIN_MEAS_NOISE, measNoise);
-      const S  = p00 + R;                   // innovation covariance
-      const k0 = p00 / S;                   // Kalman gain for position
-      const k1 = p10 / S;                   // Kalman gain for velocity
-
-      const innov = measurement - xPred;
-      kf.x = xPred + k0 * innov;
-      kf.v = vPred + k1 * innov;
-
-      kf.p = [
-        [p00 - k0 * p00, p01 - k0 * p01],
-        [p10 - k1 * p00, p11 - k1 * p01],
-      ];
-
-      return kf.x;
-    }
-
-    let lastGpsTs = null;  // timestamp of previous GPS fix
-
-    function applyKalman(rawLat, rawLng, accuracyMetres) {
-      const now = Date.now();
-      const dt  = lastGpsTs !== null ? (now - lastGpsTs) / 1000 : 1.0;  // seconds
-      lastGpsTs = now;
-
-      // Convert accuracy (metres) to degrees² measurement noise
-      const degPerMetre = 1 / 111320;
-      const measNoise   = Math.pow(accuracyMetres * degPerMetre, 2);
-
-      const filtLat = kalmanUpdate(kfLat, rawLat, dt, measNoise);
-      const filtLng = kalmanUpdate(kfLng, rawLng, dt, measNoise);
-      return { lat: filtLat, lng: filtLng };
-    }
-
-    // ── Bearing smoothing ─────────────────────────────────────────────
-    // Simple circular moving average over last N bearings.
-    const BEARING_WINDOW = 5;
-    let bearingBuffer = [];
-
-    function smoothBearing(rawBearing) {
-      bearingBuffer.push(rawBearing);
-      if (bearingBuffer.length > BEARING_WINDOW) bearingBuffer.shift();
-      if (bearingBuffer.length === 1) return rawBearing;
-      // Circular mean: average sin and cos to handle 0/360 wrap
-      let sinSum = 0, cosSum = 0;
-      for (const b of bearingBuffer) {
-        sinSum += Math.sin(b * Math.PI / 180);
-        cosSum += Math.cos(b * Math.PI / 180);
-      }
-      return (Math.atan2(sinSum, cosSum) * 180 / Math.PI + 360) % 360;
-    }
-
-    // ── Throttled emit ────────────────────────────────────────────────
-    // Orientation fires 30–60× per second on iOS; we only need ~3 Hz.
-    const EMIT_INTERVAL_MS = 333;
-    let lastEmitTs = 0;
-
-    function throttledEmit() {
-      const now = Date.now();
-      if (now - lastEmitTs < EMIT_INTERVAL_MS) return;
-      lastEmitTs = now;
-      if (myLat === null) return;
-      socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
-    }
-
     // ── GPS ───────────────────────────────────────────────────────────
+    let myLat_ = null; // alias kept for closure; we use myLat/myLng directly
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(
         (pos) => {
-          const accuracy = pos.coords.accuracy || 10;
-          const filtered = applyKalman(pos.coords.latitude, pos.coords.longitude, accuracy);
-          myLat = filtered.lat;
-          myLng = filtered.lng;
-          myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)} (±${Math.round(accuracy)}מ׳)`;
-          throttledEmit();
+          myLat = pos.coords.latitude;
+          myLng = pos.coords.longitude;
+          myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
           updateCalReadiness();
-          refreshLog(`GPS עודכן (דיוק: ±${Math.round(accuracy)}מ׳)`);
+          refreshLog("GPS עודכן");
         },
         (err) => {
           myLocationEl.textContent = "שגיאה: " + err.message;
           refreshLog("שגיאת GPS: " + err.message);
         },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
       );
     } else {
       refreshLog("הדפדפן לא תומך ב-GPS");
@@ -978,7 +868,8 @@
         myTilt = avg;                                   // store smoothed value
         updateMyTiltDisplay();
         // Emit smoothed tilt so the other phone's audio uses clean data
-        if (myLat !== null) throttledEmit();
+        if (myLat !== null)
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
       }
     }
 
@@ -1042,9 +933,8 @@
         return;
       }
 
-      const dist      = haversineDistance(myLat, myLng, data.lat, data.lng);
-      const rawBearing = calcBearing(myLat, myLng, data.lat, data.lng);
-      lastBearing     = smoothBearing(rawBearing);
+      const dist    = haversineDistance(myLat, myLng, data.lat, data.lng);
+      lastBearing   = calcBearing(myLat, myLng, data.lat, data.lng);
 
       const distFmt = dist < 1000
         ? Math.round(dist) + " מטרים"
@@ -1152,7 +1042,7 @@
     let masterVolume = 0.8; // 0.0–1.0, controlled by slider
 
     function distanceToGain(metres) {
-      if (metres === null || metres === undefined) return 0;
+      if (metres === null || metres === undefined) return masterVolume; // no distance data → full volume
       let ratio;
       if (metres <= DIST_NEAR) {
         ratio = 1.0;
@@ -1191,29 +1081,35 @@
     // Ensure AudioContext is running; safe to call from non-gesture context.
     function ensureAudioReady() {
       if (!audioCtx) return false;
-      // resume() returns a Promise; we don't need to await it here —
-      // the next scheduled beep will land after it resolves.
+      if (audioCtx.state === "closed") return false;
+      // On iOS the context may be suspended after creation or after backgrounding.
+      // resume() is async — we kick it off and return true so the beep loop
+      // continues; the audio node will simply play once the context is running.
       if (audioCtx.state === "suspended") {
         audioCtx.resume().catch(() => {});
       }
-      return audioCtx.state !== "closed";
+      return true;
     }
 
     // Play one beep and schedule the next one via onended.
     function scheduleBeep() {
       if (isMuted || !beepLoopActive) { beepLoopActive = false; return; }
       if (!ensureAudioReady()) { beepLoopActive = false; return; }
-      if (otherTilt === null || otherTiltSide === 0) {
+      if (otherTilt === null) {
         // No data yet — check again after one gap
-        const resumeTimer = setTimeout(() => {
+        setTimeout(() => {
           if (!isMuted && beepLoopActive) scheduleBeep();
         }, BEEP_GAP * 1000);
         return;
       }
 
+      // otherTiltSide may still be 0 if hysteresis hasn't committed yet;
+      // fall back to the raw tilt sign so we still beep
+      const effectiveSide = otherTiltSide !== 0 ? otherTiltSide : (otherTilt > 0 ? 1 : otherTilt < 0 ? -1 : 1);
+
       const metres = getCurrentMetres();
       const gain   = distanceToGain(metres);
-      const freq   = otherTiltSide > 0 ? FREQ_HIGH : FREQ_LOW;
+      const freq   = effectiveSide > 0 ? FREQ_HIGH : FREQ_LOW;
 
       try {
         const now = audioCtx.currentTime;
@@ -1293,13 +1189,25 @@
           masterGain.connect(audioCtx.destination);
         }
 
-        // Always resume — iOS may have suspended the context
+        // iOS Safari requires a sound to be played synchronously within the
+        // user gesture to unlock the AudioContext. We play a zero-length silent
+        // buffer right now (still inside the tap handler), which unlocks it.
+        // After that, resume() + beep loop work normally.
+        try {
+          const silentBuf = audioCtx.createBuffer(1, 1, 22050);
+          const silentSrc = audioCtx.createBufferSource();
+          silentSrc.buffer = silentBuf;
+          silentSrc.connect(audioCtx.destination);
+          silentSrc.start(0);
+        } catch(e) {}
+
         const activate = () => {
           masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
           isMuted = false;
           muteBtn.textContent    = "🔇 השתק חיווי קולי";
           muteBtn.classList.remove("muted");
           audioStatus.textContent = "פעיל — ממתין לטלפון שני";
+          volumeSection.classList.add("visible");
           startBeeping();
         };
 
@@ -1309,7 +1217,6 @@
           });
         } else {
           activate();
-        volumeSection.classList.add("visible");
         }
 
       } else {
