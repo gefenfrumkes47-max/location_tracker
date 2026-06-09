@@ -1190,6 +1190,7 @@
           muteBtn.textContent    = "🔇 השתק חיווי קולי";
           muteBtn.classList.remove("muted");
           audioStatus.textContent = "פעיל — ממתין לטלפון שני";
+          volumeSection.classList.add("visible");
           startBeeping();
         };
 
@@ -1199,7 +1200,6 @@
           });
         } else {
           activate();
-        volumeSection.classList.add("visible");
         }
 
       } else {
