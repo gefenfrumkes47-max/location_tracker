@@ -1137,35 +1137,26 @@
     const muteBtn     = document.getElementById("mute-btn");
     const audioStatus = document.getElementById("audio-status");
 
-    let audioCtx       = null;
-    let masterGain     = null;
-    let isMuted        = true;
-    let cycleTimer     = null;   // setInterval handle for the 5s cycle
+    let audioCtx   = null;
+    let masterGain = null;
+    let isMuted    = true;
+    let cycleTimer = null;
 
-    const FREQ_HIGH   = 1400;   // Hz — right tilt
-    const FREQ_LOW    =  320;   // Hz — left tilt
-    const BEEP_DUR    =  0.15;  // seconds per beep
-    const BEEP_PAUSE  =  0.22;  // seconds between beeps
-    const CYCLE_MS    =  5000;  // ms between cycles
+    const CYCLE_MS = 5000;
 
-    // Distance → number of beeps: distance / 7, clamped 1–20
-    function distanceToBeeps(metres) {
-      if (metres === null || metres === undefined) return 1;
-      return Math.max(1, Math.min(20, Math.round(metres / 7)));
+    // Distance in metres → "סירה" units (÷7, rounded, min 1)
+    function distanceToShips(metres) {
+      if (metres === null || metres === undefined) return null;
+      return Math.max(1, Math.round(metres / 7));
     }
 
-    // Angle (0–360, 0=ahead) → clock hour string in Hebrew
-    const CLOCK_HEBREW = [
-      "שתים-עשרה", "אחת", "שתיים", "שלוש", "ארבע", "חמש",
-      "שש", "שבע", "שמונה", "תשע", "עשר", "אחת-עשרה"
-    ];
+    // Angle (0–360, 0=ahead) → clock hour 1–12
     function angleToClock(deg) {
-      // 0° = 12 o'clock, 30° per hour
-      const hour = Math.round(((deg % 360) + 360) % 360 / 30) % 12;
-      return CLOCK_HEBREW[hour];
+      const norm = ((deg % 360) + 360) % 360;
+      let hour = Math.round(norm / 30) % 12;
+      return hour === 0 ? 12 : hour;
     }
 
-    // Current display angle (0=ahead)
     function getCurrentAngleDeg() {
       const txt = angleEl.textContent;
       if (!txt || txt === "--") return null;
@@ -1182,28 +1173,6 @@
       return isNaN(m) ? null : m;
     }
 
-    let masterVolume = 0.8;
-
-    const volumeSection = document.getElementById("volume-section");
-    const volumeSlider  = document.getElementById("volume-slider");
-    const volumeDisplay = document.getElementById("volume-display");
-
-    function onVolumeChange(val) {
-      masterVolume = val / 100;
-      volumeDisplay.textContent = val + "%";
-      volumeSlider.style.setProperty("--vol-pct", val + "%");
-    }
-    onVolumeChange(volumeSlider.value);
-
-    function ensureAudioReady() {
-      if (!audioCtx) return false;
-      if (audioCtx.state === "closed") return false;
-      return true;   // even if suspended — callers must await resumeAudio() before scheduling
-    }
-
-    // Returns a Promise that resolves once AudioContext is truly running.
-    // Must be called (and awaited) before scheduling any Web Audio nodes,
-    // especially after TTS on iOS which steals and releases the audio session.
     function resumeAudio() {
       if (!audioCtx || audioCtx.state === "closed") return Promise.reject();
       if (audioCtx.state === "running") return Promise.resolve();
@@ -1211,16 +1180,14 @@
     }
 
     // ── Voice detection ───────────────────────────────────────────────
-    // Check once whether a Hebrew TTS voice is actually available.
-    // If not, we skip speech entirely and go straight to beeps.
-    let _heVoice   = null;   // the chosen Hebrew voice, or null
-    let _voiceReady = false; // true once we've finished looking
+    let _heVoice    = null;
+    let _voiceReady = false;
 
     function _detectVoice() {
       if (!window.speechSynthesis) { _voiceReady = true; return; }
       const voices = speechSynthesis.getVoices();
-      if (voices.length === 0) return;  // not loaded yet — wait for voiceschanged
-      _heVoice   = voices.find(v => v.lang.startsWith("he")) || null;
+      if (voices.length === 0) return;
+      _heVoice    = voices.find(v => v.lang.startsWith("he")) || null;
       _voiceReady = true;
     }
     if (window.speechSynthesis) {
@@ -1230,86 +1197,46 @@
       _voiceReady = true;
     }
 
-    // ── TTS — speak one word, then call onDone ────────────────────────
-    // Skips silently if no Hebrew voice found (Android/Windows without he pack).
-    // Guards against onend never firing (iOS after audio session hand-back).
-    function speakClock(clockWord, onDone) {
-      // No Hebrew voice available → skip TTS, go straight to beeps
-      if (!_voiceReady || !_heVoice) { setTimeout(onDone, 0); return; }
-
+    // ── Speak one phrase, call onDone when finished ───────────────────
+    // Skips if no Hebrew voice. Always calls onDone (via guard if needed).
+    function speakPhrase(text, onDone) {
+      if (!_voiceReady || !_heVoice || !window.speechSynthesis) {
+        setTimeout(onDone, 0);
+        return;
+      }
       speechSynthesis.cancel();
-
-      // Brief delay: Chromium needs a tick after cancel() before a new speak()
       setTimeout(() => {
-        const utt = new SpeechSynthesisUtterance(clockWord);
-        utt.voice  = _heVoice;
-        utt.lang   = _heVoice.lang;
-        utt.rate   = 1.1;
-        utt.volume = masterVolume;
-
-        let called = false;
+        const utt    = new SpeechSynthesisUtterance(text);
+        utt.voice    = _heVoice;
+        utt.lang     = _heVoice.lang;
+        utt.rate     = 1.1;
+        utt.volume   = masterVolume;
+        let called   = false;
         function done() {
           if (called) return;
           called = true;
-          // iOS: after TTS the audio session may be handed back to us,
-          // but AudioContext is left suspended. Resume it now, BEFORE onDone
-          // triggers playBeeps, so nodes have a live context to schedule into.
           resumeAudio().catch(() => {}).finally(onDone);
         }
-
-        utt.onend   = done;
-        utt.onerror = done;
-        // Safety net: if onend never fires (iOS timing quirk), continue after 4s
-        const guard = setTimeout(done, 4000);
-        const _origDone = done;
-        // Clear the guard if we finish normally
-        utt.onend = () => { clearTimeout(guard); _origDone(); };
-        utt.onerror = () => { clearTimeout(guard); _origDone(); };
-
+        const guard  = setTimeout(done, 4000);
+        utt.onend    = () => { clearTimeout(guard); done(); };
+        utt.onerror  = () => { clearTimeout(guard); done(); };
         speechSynthesis.speak(utt);
       }, 60);
     }
 
-    // ── Beeps — all scheduled upfront via Web Audio clock ────────────
-    // No setTimeout for inter-beep timing — avoids iOS throttling.
-    // All N oscillators are created and started at precise future times
-    // before the first beep plays, so timing is exact.
-    function playBeeps(n, freq, onDone) {
-      if (!audioCtx || n <= 0) { onDone(); return; }
-
-      resumeAudio().then(() => {
-        if (isMuted) { onDone(); return; }
-        const stepDur = BEEP_DUR + BEEP_PAUSE;  // seconds per beep slot
-        const t0      = audioCtx.currentTime + 0.05; // small safety margin
-
-        for (let i = 0; i < n; i++) {
-          const t    = t0 + i * stepDur;
-          const osc  = audioCtx.createOscillator();
-          const amp  = audioCtx.createGain();
-          osc.connect(amp);
-          amp.connect(masterGain);
-          osc.type = "sine";
-          osc.frequency.setValueAtTime(freq, t);
-          amp.gain.setValueAtTime(0,            t);
-          amp.gain.linearRampToValueAtTime(masterVolume, t + 0.012);
-          amp.gain.setValueAtTime(masterVolume, t + BEEP_DUR - 0.025);
-          amp.gain.linearRampToValueAtTime(0,   t + BEEP_DUR);
-          osc.start(t);
-          osc.stop(t + BEEP_DUR);
-          osc.onended = () => { osc.disconnect(); amp.disconnect(); };
-        }
-
-        // Fire onDone after the last beep finishes
-        const totalDur = (n * stepDur - BEEP_PAUSE + 0.1) * 1000;
-        setTimeout(onDone, totalDur);
-
-      }).catch(() => { onDone(); });
+    // Run phrases in sequence: array of strings, then call onDone
+    function speakSequence(phrases, onDone) {
+      if (!phrases.length) { onDone(); return; }
+      const [first, ...rest] = phrases;
+      speakPhrase(first, () => {
+        // Short pause between phrases
+        setTimeout(() => speakSequence(rest, onDone), 150);
+      });
     }
 
-    // ── Cycle: TTS → beeps every 5 seconds ───────────────────────────
+    // ── Cycle: clock → distance → tilt every 5 seconds ───────────────
     function runCycle() {
       if (isMuted) return;
-      if (!audioCtx || audioCtx.state === "closed") return;
 
       const angleDeg      = getCurrentAngleDeg();
       const metres        = getCurrentMetres();
@@ -1317,30 +1244,29 @@
         ? otherTiltSide
         : (otherTilt !== null ? (otherTilt > 0 ? 1 : -1) : 0);
 
-      const n        = distanceToBeeps(metres);
-      const freq     = effectiveSide >= 0 ? FREQ_HIGH : FREQ_LOW;
-      const clockNum = angleDeg !== null ? angleToClock(angleDeg) : null;
-      const clockTxt = clockNum !== null ? clockNum.toString() : "--";
-      const beepTxt  = metres !== null ? `${n} צפצופים (${Math.round(metres)} מ׳)` : `${n} צפצופים`;
-      const tiltTxt  = effectiveSide > 0 ? `גבוה (${FREQ_HIGH}Hz)` : effectiveSide < 0 ? `נמוך (${FREQ_LOW}Hz)` : "ישר";
-      const ttsTxt   = _heVoice ? `שעה: ${clockTxt}` : "ללא TTS";
-      audioStatus.textContent = `${ttsTxt} | ${beepTxt} | ${tiltTxt}`;
+      const clockHour  = angleDeg !== null ? angleToClock(angleDeg) : null;
+      const shipDist   = distanceToShips(metres);
+      const tiltWord   = effectiveSide > 0 ? "ימין" : effectiveSide < 0 ? "שמאל" : null;
 
-      if (angleDeg === null && metres === null) {
-        audioStatus.textContent = "פעיל — ממתין לנתונים...";
-        return;
-      }
+      // Status line
+      const parts = [];
+      if (clockHour) parts.push(`שעה: ${clockHour}`);
+      if (shipDist)  parts.push(`מרחק: ${shipDist} סירות`);
+      if (tiltWord)  parts.push(`מפנה: ${tiltWord}`);
+      audioStatus.textContent = parts.length
+        ? (_heVoice ? parts.join(" | ") : "⚠️ אין קול עברי — " + parts.join(" | "))
+        : "פעיל — ממתין לנתונים...";
 
-      if (clockNum !== null && _heVoice) {
-        // Beeps first, then speak the clock number
-        resumeAudio().then(() => {
-          if (!isMuted) playBeeps(n, freq, () => {
-            setTimeout(() => { if (!isMuted) speakClock(clockTxt, () => {}); }, 200);
-          });
-        }).catch(() => {});
-      } else {
-        resumeAudio().then(() => { if (!isMuted) playBeeps(n, freq, () => {}); }).catch(() => {});
-      }
+      if (!_heVoice) return;   // nothing to speak
+      if (!clockHour && !shipDist && !tiltWord) return;
+
+      // Build the phrase list
+      const phrases = [];
+      if (clockHour !== null) phrases.push(clockHour.toString());
+      if (shipDist  !== null) phrases.push(shipDist.toString());
+      if (tiltWord  !== null) phrases.push(tiltWord);
+
+      speakSequence(phrases, () => {});
     }
 
     function startCycle() {
@@ -1366,15 +1292,11 @@
           masterGain = audioCtx.createGain();
           masterGain.connect(audioCtx.destination);
         }
-
-        // iOS: play a real (silent) buffer synchronously inside the tap handler
-        // to unlock the AudioContext. Must happen before any await/Promise.
+        // iOS unlock
         try {
           const buf = audioCtx.createBuffer(1, 1, 22050);
           const src = audioCtx.createBufferSource();
-          src.buffer = buf;
-          src.connect(audioCtx.destination);
-          src.start(0);
+          src.buffer = buf; src.connect(audioCtx.destination); src.start(0);
         } catch(e) {}
 
         audioCtx.resume().then(() => {
@@ -1383,7 +1305,7 @@
           muteBtn.textContent = "🔇 השתק חיווי קולי";
           muteBtn.classList.remove("muted");
           volumeSection.classList.add("visible");
-          audioStatus.textContent = _heVoice ? "פעיל (TTS + צפצופים)" : "פעיל (צפצופים בלבד — אין קול עברי)";
+          audioStatus.textContent = _heVoice ? "פעיל" : "פעיל (⚠️ אין קול עברי)";
           startCycle();
         }).catch(() => {
           audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
@@ -1405,6 +1327,27 @@
         audioCtx.resume().then(() => { if (!cycleTimer) startCycle(); }).catch(() => {});
       }
     });
+
+    const volumeSection = document.getElementById("volume-section");
+    const volumeSlider  = document.getElementById("volume-slider");
+    const volumeDisplay = document.getElementById("volume-display");
+
+    function onVolumeChange(val) {
+      masterVolume = val / 100;
+      volumeDisplay.textContent = val + "%";
+      volumeSlider.style.setProperty("--vol-pct", val + "%");
+    }
+    onVolumeChange(volumeSlider.value);
+
+    function ensureAudioReady() {
+      if (!audioCtx) return false;
+      if (audioCtx.state === "closed") return false;
+      return true;   // even if suspended — callers must await resumeAudio() before scheduling
+    }
+
+    // Returns a Promise that resolves once AudioContext is truly running.
+    // Must be called (and awaited) before scheduling any Web Audio nodes,
+    // especially after TTS on iOS which steals and releases the audio session.
     // Initial log render
     refreshLog("הדף נטען");
   </script>
