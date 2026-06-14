@@ -1332,9 +1332,12 @@
       }
 
       if (clockNum !== null && _heVoice) {
-        speakClock(clockTxt, () => {
-          setTimeout(() => { if (!isMuted) playBeeps(n, freq, () => {}); }, 200);
-        });
+        // Beeps first, then speak the clock number
+        resumeAudio().then(() => {
+          if (!isMuted) playBeeps(n, freq, () => {
+            setTimeout(() => { if (!isMuted) speakClock(clockTxt, () => {}); }, 200);
+          });
+        }).catch(() => {});
       } else {
         resumeAudio().then(() => { if (!isMuted) playBeeps(n, freq, () => {}); }).catch(() => {});
       }
