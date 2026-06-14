@@ -16,17 +16,32 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+const MAX_DEVICES = 2;
+let connectedCount = 0;
+
 io.on("connection", (socket) => {
-  console.log("Device connected: " + socket.id);
+  connectedCount++;
+
+  if (connectedCount > MAX_DEVICES) {
+    console.log("Connection rejected (limit reached): " + socket.id);
+    socket.emit("server-full", { message: "השרת מלא — כבר מחוברים 2 מכשירים" });
+    socket.disconnect(true);
+    connectedCount--;
+    return;
+  }
+
+  console.log(`Device connected: ${socket.id} (${connectedCount}/${MAX_DEVICES})`);
+  io.emit("device-count", { count: connectedCount });
 
   socket.on("send-location", (data) => {
-    console.log("Location from " + socket.id + ":", data);
     // Broadcast to all OTHER connected devices
     socket.broadcast.emit("receive-location", data);
   });
 
   socket.on("disconnect", () => {
-    console.log("Device disconnected: " + socket.id);
+    connectedCount--;
+    console.log(`Device disconnected: ${socket.id} (${connectedCount}/${MAX_DEVICES})`);
+    io.emit("device-count", { count: connectedCount });
   });
 });
 

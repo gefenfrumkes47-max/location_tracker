@@ -278,6 +278,71 @@
       font-size: 0.72rem; color: #4b5563;
       margin-top: 6px; text-align: center;
     }
+
+    /* ── Tilt calibration ── */
+    #tilt-cal-btn {
+      margin-top: 12px; padding: 9px 18px;
+      background: transparent; color: #34d399;
+      border: 1px solid #34d399; border-radius: 8px;
+      font-size: 0.85rem; font-weight: 600; cursor: pointer;
+      width: 100%; transition: background 0.2s;
+    }
+    #tilt-cal-btn:hover   { background: rgba(52,211,153,0.1); }
+    #tilt-cal-btn.running { background: rgba(52,211,153,0.15); color: #6ee7b7; cursor: default; border-color: #6ee7b7; }
+    #tilt-cal-btn.done    { background: rgba(52,211,153,0.2);  color: #34d399; border-color: #34d399; }
+
+    #tilt-cal-progress-wrap {
+      display: none;
+      margin-top: 8px;
+      height: 6px;
+      background: #2d2d4e;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    #tilt-cal-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #34d399;
+      border-radius: 3px;
+      transition: width 0.5s linear;
+    }
+    #tilt-cal-status {
+      font-size: 0.72rem; color: #6b6b9a;
+      margin-top: 5px; text-align: center;
+    }
+
+    /* ── Volume slider ── */
+    .volume-section {
+      width: 100%; max-width: 340px;
+      margin-top: 10px;
+      display: none; /* shown when audio is active */
+    }
+    .volume-section.visible { display: block; }
+    .volume-label-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.75rem; color: #6b6b9a; margin-bottom: 6px;
+    }
+    .volume-label-row span { color: #a78bfa; font-weight: 700; font-size: 0.85rem; }
+    #volume-slider {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 6px;
+      border-radius: 3px;
+      background: linear-gradient(to right, #a78bfa 0%, #a78bfa var(--vol-pct, 80%), #2d2d4e var(--vol-pct, 80%), #2d2d4e 100%);
+      outline: none; cursor: pointer;
+    }
+    #volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #a78bfa; border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(167,139,250,0.5);
+      cursor: pointer;
+    }
+    #volume-slider::-moz-range-thumb {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #a78bfa; border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(167,139,250,0.5);
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -390,6 +455,10 @@
       </div>
 
     </div>
+    <!-- Tilt calibration -->
+    <button id="tilt-cal-btn" onclick="startTiltCalibration()">⚖️ כייל מצב אפס (דקה)</button>
+    <div id="tilt-cal-progress-wrap"><div id="tilt-cal-progress-bar"></div></div>
+    <div id="tilt-cal-status">לא מכויל — הטיה נמדדת יחסית לאפס הגלמי</div>
   </div>
 
   <!-- ── Structured log ── -->
@@ -435,6 +504,15 @@
 
   <button id="mute-btn" onclick="toggleMute()">🔊 השמע חיווי קולי</button>
   <div id="audio-status">כבוי — לחץ להפעלה</div>
+
+  <div class="volume-section" id="volume-section">
+    <div class="volume-label-row">
+      <span>🔈</span>
+      <span id="volume-display">80%</span>
+      <span>🔊</span>
+    </div>
+    <input type="range" id="volume-slider" min="0" max="100" value="80" oninput="onVolumeChange(this.value)">
+  </div>
 
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script>
@@ -495,6 +573,7 @@
     const TILT_HYSTERESIS = 5;  // degrees — must cross ±5° to change side
     let tiltBuffer = [];        // raw samples in the window
     let tiltSide = 0;           // -1 left, 0 centre, +1 right (hysteresis state)
+    let tiltZeroOffset = 0;     // calibrated zero: subtracted from every raw reading
     let lastBearing = null;     // absolute bearing to other phone
     let otherTilt = null;       // smoothed gamma received from other device
     let otherTiltSide = 0;      // hysteresis side for other phone (-1/0/+1)
@@ -547,7 +626,8 @@
     // ── Tilt smoothing helpers ────────────────────────────────────────
     function pushTiltSample(raw) {
       const now = Date.now();
-      tiltBuffer.push({ value: raw, ts: now });
+      // Subtract calibrated zero so the buffer works in offset-corrected space
+      tiltBuffer.push({ value: raw - tiltZeroOffset, ts: now });
       // Drop samples older than the window
       tiltBuffer = tiltBuffer.filter(s => now - s.ts <= TILT_WINDOW_MS);
     }
@@ -583,6 +663,76 @@
       if (deg === null) { el.setAttribute("transform", "translate(55,25)"); return; }
       const x = 55 + Math.round((deg / 90) * 46);
       el.setAttribute("transform", `translate(${x},25) rotate(${deg})`);
+    }
+
+    // ── Tilt calibration (60 second zero baseline) ────────────────────
+    const TILT_CAL_DURATION = 60000;   // ms
+    const TILT_CAL_TICK     =  500;    // UI update interval ms
+    let tiltCalSamples  = [];          // raw gamma collected during cal session
+    let tiltCalInterval = null;        // UI tick interval
+    let tiltCalStart    = null;        // Date.now() when cal started
+
+    const tiltCalBtn     = document.getElementById("tilt-cal-btn");
+    const tiltCalWrap    = document.getElementById("tilt-cal-progress-wrap");
+    const tiltCalBar     = document.getElementById("tilt-cal-progress-bar");
+    const tiltCalStatus  = document.getElementById("tilt-cal-status");
+
+    function startTiltCalibration() {
+      if (tiltCalInterval) return;            // already running
+      tiltCalSamples = [];
+      tiltCalStart   = Date.now();
+
+      tiltCalBtn.classList.add("running");
+      tiltCalBtn.textContent  = "⏳ מכייל... (60 שניות)";
+      tiltCalWrap.style.display = "block";
+      tiltCalBar.style.width    = "0%";
+      tiltCalStatus.textContent = "מודד הטיית בסיס — אל תזיזו את הטלפון";
+
+      tiltCalInterval = setInterval(() => {
+        const elapsed  = Date.now() - tiltCalStart;
+        const pct      = Math.min(100, (elapsed / TILT_CAL_DURATION) * 100);
+        tiltCalBar.style.width = pct.toFixed(1) + "%";
+        const secLeft  = Math.ceil((TILT_CAL_DURATION - elapsed) / 1000);
+        const n        = tiltCalSamples.length;
+        tiltCalStatus.textContent = `מודד... ${secLeft} שניות | ${n} דגימות`;
+
+        if (elapsed >= TILT_CAL_DURATION) {
+          finishTiltCalibration();
+        }
+      }, TILT_CAL_TICK);
+    }
+
+    // Called from handleOrientation while calibration is running
+    function collectCalSample(rawGamma) {
+      if (tiltCalInterval) tiltCalSamples.push(rawGamma);
+    }
+
+    function finishTiltCalibration() {
+      clearInterval(tiltCalInterval);
+      tiltCalInterval = null;
+
+      if (tiltCalSamples.length === 0) {
+        tiltCalStatus.textContent = "כישלון — לא התקבלו דגימות מהחיישן";
+        tiltCalBtn.classList.remove("running");
+        tiltCalBtn.textContent = "⚖️ כייל מצב אפס (דקה)";
+        return;
+      }
+
+      const avg = tiltCalSamples.reduce((s, v) => s + v, 0) / tiltCalSamples.length;
+      tiltZeroOffset = Math.round(avg * 10) / 10;
+
+      // Reset the 10s rolling buffer & hysteresis so they start fresh from new zero
+      tiltBuffer = [];
+      tiltSide   = 0;
+
+      tiltCalBar.style.width = "100%";
+      tiltCalBtn.classList.remove("running");
+      tiltCalBtn.classList.add("done");
+      tiltCalBtn.textContent = `⚖️ כויל מחדש (אפס: ${tiltZeroOffset}°)`;
+      tiltCalStatus.textContent =
+        `✓ כיול הושלם — אפס: ${tiltZeroOffset}° | ${tiltCalSamples.length} דגימות`;
+
+      refreshLog("כיול הטיה הושלם ✓");
     }
 
     // ── Log panel update ──────────────────────────────────────────────
@@ -745,6 +895,27 @@
       statusText.textContent = "מנותק";
       refreshLog("התנתק מהשרת");
     });
+    socket.on("server-full", (data) => {
+      dot.classList.remove("connected");
+      statusText.textContent = "⛔ " + (data.message || "השרת מלא");
+      refreshLog("חיבור נדחה — השרת מלא");
+    });
+    socket.on("device-count", (data) => {
+      const count = data.count || 0;
+      const label = count === 1 ? "מכשיר אחד מחובר" : `${count} מכשירים מחוברים`;
+      if (!statusText.textContent.startsWith("⛔")) {
+        statusText.textContent = `מחובר לשרת ✓ (${label})`;
+      }
+    });
+
+    // Re-resume AudioContext when page becomes visible again (iOS kills it in bg)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && audioCtx && !isMuted) {
+        audioCtx.resume().then(() => {
+          if (!beepLoopActive) startBeeping();
+        }).catch(() => {});
+      }
+    });
 
     // ── GPS ───────────────────────────────────────────────────────────
     let myLat_ = null; // alias kept for closure; we use myLat/myLng directly
@@ -754,7 +925,7 @@
           myLat = pos.coords.latitude;
           myLng = pos.coords.longitude;
           myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
-          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
           updateCalReadiness();
           refreshLog("GPS עודכן");
         },
@@ -799,6 +970,7 @@
       // Tilt (gamma): negative = leaning left, positive = leaning right
       if (event.gamma !== null && event.gamma !== undefined) {
         myTiltRaw = Math.round(event.gamma * 10) / 10;  // keep one decimal raw
+        collectCalSample(myTiltRaw);                    // feed calibration if running
         pushTiltSample(myTiltRaw);
         const avg = calcSmoothedTilt();
         applyHysteresis(avg);                           // updates tiltSide
@@ -806,7 +978,7 @@
         updateMyTiltDisplay();
         // Emit smoothed tilt so the other phone's audio uses clean data
         if (myLat !== null)
-          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt });
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
       }
     }
 
@@ -816,7 +988,7 @@
       myTiltValEl.textContent = myTilt.toFixed(1);
       // Direction: hysteresis-confirmed side + raw reading in parentheses
       const sideLabel = tiltSide === 1 ? "ימין ✓" : tiltSide === -1 ? "שמאל ✓" : "ישר";
-      const rawLabel  = myTiltRaw !== null ? ` (גולמי: ${myTiltRaw}°)` : "";
+      const rawLabel  = myTiltRaw !== null ? ` (גולמי: ${myTiltRaw}°, אפס: ${tiltZeroOffset}°)` : "";
       myTiltDirEl.textContent = `${sideLabel}${rawLabel}`;
       // SVG animation uses the smoothed value
       animateTiltPhone(myTiltPhoneEl, myTilt);
@@ -863,7 +1035,8 @@
         refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} (ממתין ל-GPS שלי)`);
         // Still update other tilt if present
         if (data.tilt !== null && data.tilt !== undefined) {
-          otherTilt = data.tilt;
+          otherTilt     = data.tilt;
+          otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
           updateOtherTiltDisplay();
         }
         return;
@@ -878,9 +1051,10 @@
       distanceEl.textContent = dist < 1000 ? Math.round(dist) : (dist / 1000).toFixed(2);
       distUnitEl.textContent = dist < 1000 ? "מטרים" : "ק״מ";
 
-      // Other tilt
+      // Other tilt — use the sender's already-computed tiltSide directly
       if (data.tilt !== null && data.tilt !== undefined) {
-        otherTilt = data.tilt;
+        otherTilt     = data.tilt;
+        otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
         updateOtherTiltDisplay();
       } else {
         otherTilt = null;
@@ -897,15 +1071,7 @@
     });
 
     function updateOtherTiltDisplay() {
-      // Apply same hysteresis logic to the received smoothed value
-      if (otherTiltSide === 0) {
-        if (otherTilt >  TILT_HYSTERESIS) otherTiltSide =  1;
-        if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
-      } else if (otherTiltSide === 1) {
-        if (otherTilt < -TILT_HYSTERESIS) otherTiltSide = -1;
-      } else {
-        if (otherTilt >  TILT_HYSTERESIS) otherTiltSide =  1;
-      }
+      // otherTiltSide is now set directly from the sender — no local recalculation needed
       otherTiltValEl.textContent = typeof otherTilt === "number" ? otherTilt.toFixed(1) : otherTilt;
       const sideLabel = otherTiltSide === 1 ? "ימין ✓" : otherTiltSide === -1 ? "שמאל ✓" : "ישר";
       otherTiltDirEl.textContent = sideLabel;
@@ -947,113 +1113,224 @@
     }
 
     // ── Audio engine ──────────────────────────────────────────────────
-    // Beeps at HIGH freq when other phone tilt > 0, LOW freq when tilt < 0.
-    // Volume scales with proximity: loud when close (few metres), quiet when far (~150m).
-    // Nothing plays when: muted, no other phone connected, tilt == 0.
+    // Every 5 seconds:
+    //  1. Speech: clock-position of other boat (e.g. "שתיים" for 2 o'clock)
+    //  2. N beeps where N = Math.round(distance / 7), min 1
+    //     Each beep: HIGH freq if other tilt is right, LOW if left
+    // Cross-platform (iOS Safari, Android Chrome, desktop).
 
     const muteBtn     = document.getElementById("mute-btn");
     const audioStatus = document.getElementById("audio-status");
 
-    let audioCtx      = null;   // created on first unmute (requires user gesture)
-    let isMuted       = true;   // start OFF — user must opt in
-    let beepInterval  = null;   // setInterval handle
-    let isBeeping     = false;  // guard against overlapping beeps
+    let audioCtx       = null;
+    let masterGain     = null;
+    let isMuted        = true;
+    let cycleTimer     = null;   // setInterval handle for the 5s cycle
 
-    // Frequency mapping
-    const FREQ_HIGH = 1400;   // Hz — positive tilt
-    const FREQ_LOW  =  320;   // Hz — negative tilt
-    const BEEP_DUR  =  120;   // ms — each beep duration
-    const BEEP_GAP  =  350;   // ms — interval between beep starts
+    const FREQ_HIGH   = 1400;   // Hz — right tilt
+    const FREQ_LOW    =  320;   // Hz — left tilt
+    const BEEP_DUR    =  0.15;  // seconds per beep
+    const BEEP_PAUSE  =  0.22;  // seconds between beeps
+    const CYCLE_MS    =  5000;  // ms between cycles
 
-    // Distance → volume curve
-    // At 0 m  → gain 1.0 (max)
-    // At 150 m → gain 0.03 (barely audible)
-    // Uses inverse-square-ish curve clamped to [0.03, 1.0]
-    function distanceToGain(metres) {
-      if (metres === null || metres === undefined) return 0;
-      const clamped = Math.max(1, metres);           // avoid div-by-zero
-      // gain = 1 / (1 + k*d)  — tuned so 150m → ~0.03
-      const k = (1 / 0.03 - 1) / 150;               // ≈ 0.218
-      return Math.min(1.0, 1 / (1 + k * clamped));
+    // Distance → number of beeps: distance / 7, clamped 1–20
+    function distanceToBeeps(metres) {
+      if (metres === null || metres === undefined) return 1;
+      return Math.max(1, Math.min(20, Math.round(metres / 7)));
     }
 
-    function playBeep(freq, gain) {
-      if (!audioCtx || isBeeping) return;
-      isBeeping = true;
-      const osc  = audioCtx.createOscillator();
-      const amp  = audioCtx.createGain();
-      osc.connect(amp);
-      amp.connect(audioCtx.destination);
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      // Quick fade-in + fade-out to avoid clicks
-      amp.gain.setValueAtTime(0, audioCtx.currentTime);
-      amp.gain.linearRampToValueAtTime(gain, audioCtx.currentTime + 0.01);
-      amp.gain.setValueAtTime(gain, audioCtx.currentTime + BEEP_DUR / 1000 - 0.02);
-      amp.gain.linearRampToValueAtTime(0,    audioCtx.currentTime + BEEP_DUR / 1000);
-      osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime + BEEP_DUR / 1000);
-      osc.onended = () => { isBeeping = false; };
+    // Angle (0–360, 0=ahead) → clock hour string in Hebrew
+    const CLOCK_HEBREW = [
+      "שתים-עשרה", "אחת", "שתיים", "שלוש", "ארבע", "חמש",
+      "שש", "שבע", "שמונה", "תשע", "עשר", "אחת-עשרה"
+    ];
+    function angleToClock(deg) {
+      // 0° = 12 o'clock, 30° per hour
+      const hour = Math.round(((deg % 360) + 360) % 360 / 30) % 12;
+      return CLOCK_HEBREW[hour];
     }
 
-    function startBeeping() {
-      if (beepInterval) return;
-      beepInterval = setInterval(() => {
-        if (isMuted) return;
-        if (otherTilt === null) return;           // no other phone yet
-        if (otherTiltSide === 0) return;          // hysteresis says: centre — no beep
-
-        // Get current distance in metres
-        let metres = null;
-        const dTxt = distanceEl.textContent;
-        const uTxt = distUnitEl.textContent;
-        if (dTxt !== "--") {
-          metres = parseFloat(dTxt);
-          if (uTxt === "ק״מ") metres *= 1000;
-        }
-
-        // Use hysteresis-confirmed side, not raw sign
-        const freq = otherTiltSide > 0 ? FREQ_HIGH : FREQ_LOW;
-        const gain = distanceToGain(metres);
-
-        playBeep(freq, gain);
-        updateAudioStatus(freq, gain, metres);
-      }, BEEP_GAP);
+    // Current display angle (0=ahead)
+    function getCurrentAngleDeg() {
+      const txt = angleEl.textContent;
+      if (!txt || txt === "--") return null;
+      const n = parseFloat(txt);
+      return isNaN(n) ? null : n;
     }
 
-    function stopBeeping() {
-      if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+    function getCurrentMetres() {
+      const dTxt = distanceEl.textContent;
+      const uTxt = distUnitEl.textContent;
+      if (dTxt === "--") return null;
+      let m = parseFloat(dTxt);
+      if (uTxt === "ק״מ") m *= 1000;
+      return isNaN(m) ? null : m;
     }
 
-    function updateAudioStatus(freq, gain, metres) {
-      if (isMuted) { audioStatus.textContent = "כבוי"; return; }
-      if (otherTilt === null) { audioStatus.textContent = "פעיל — ממתין לטלפון שני"; return; }
-      const dir    = otherTiltSide > 0 ? "גבוה" : otherTiltSide < 0 ? "נמוך" : "שקט";
-      const volPct = Math.round((gain ?? 0) * 100);
-      const distTxt = metres !== null ? `${Math.round(metres)} מ׳` : "--";
-      audioStatus.textContent = `תדר: ${dir} (${freq ?? "--"} Hz) | עוצמה: ${volPct}% | מרחק: ${distTxt}`;
+    let masterVolume = 0.8;
+
+    const volumeSection = document.getElementById("volume-section");
+    const volumeSlider  = document.getElementById("volume-slider");
+    const volumeDisplay = document.getElementById("volume-display");
+
+    function onVolumeChange(val) {
+      masterVolume = val / 100;
+      volumeDisplay.textContent = val + "%";
+      volumeSlider.style.setProperty("--vol-pct", val + "%");
+    }
+    onVolumeChange(volumeSlider.value);
+
+    function ensureAudioReady() {
+      if (!audioCtx) return false;
+      if (audioCtx.state === "closed") return false;
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      return true;
+    }
+
+    // Speak the clock position using SpeechSynthesis, then run callback
+    function speakClock(clockWord, onDone) {
+      if (!window.speechSynthesis) { onDone(); return; }
+      // Cancel any leftover speech
+      speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(clockWord);
+      utt.lang = "he-IL";
+      utt.rate = 1.1;
+      utt.volume = masterVolume;
+      utt.onend   = () => onDone();
+      utt.onerror = () => onDone();
+      speechSynthesis.speak(utt);
+    }
+
+    // Play a sequence of N beeps, then call onDone
+    function playBeeps(n, freq, onDone) {
+      if (!ensureAudioReady() || n <= 0) { onDone(); return; }
+      let i = 0;
+      function nextBeep() {
+        if (isMuted || i >= n) { onDone(); return; }
+        try {
+          const now = audioCtx.currentTime;
+          const osc = audioCtx.createOscillator();
+          const amp = audioCtx.createGain();
+          osc.connect(amp);
+          amp.connect(masterGain);
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(freq, now);
+          amp.gain.setValueAtTime(0, now);
+          amp.gain.linearRampToValueAtTime(masterVolume, now + 0.012);
+          amp.gain.setValueAtTime(masterVolume, now + BEEP_DUR - 0.025);
+          amp.gain.linearRampToValueAtTime(0, now + BEEP_DUR);
+          osc.start(now);
+          osc.stop(now + BEEP_DUR);
+          osc.onended = () => {
+            osc.disconnect(); amp.disconnect();
+            i++;
+            setTimeout(nextBeep, BEEP_PAUSE * 1000);
+          };
+        } catch(e) { onDone(); }
+      }
+      nextBeep();
+    }
+
+    // Run one full cycle: speech → beeps
+    function runCycle() {
+      if (isMuted || !ensureAudioReady()) return;
+
+      const angleDeg = getCurrentAngleDeg();
+      const metres   = getCurrentMetres();
+      const effectiveSide = otherTiltSide !== 0
+        ? otherTiltSide
+        : (otherTilt !== null ? (otherTilt > 0 ? 1 : -1) : 0);
+
+      const n     = distanceToBeeps(metres);
+      const freq  = effectiveSide >= 0 ? FREQ_HIGH : FREQ_LOW;
+
+      // Build status text
+      const clockTxt  = angleDeg !== null ? angleToClock(angleDeg) : "--";
+      const beepTxt   = metres !== null ? `${n} צפצופים (${Math.round(metres)} מ׳)` : `${n} צפצופים`;
+      const tiltTxt   = effectiveSide > 0 ? `גבוה (${FREQ_HIGH} Hz)` : effectiveSide < 0 ? `נמוך (${FREQ_LOW} Hz)` : "ישר";
+      audioStatus.textContent = `שעה: ${clockTxt} | ${beepTxt} | תדר: ${tiltTxt}`;
+
+      if (angleDeg === null && metres === null) {
+        // Nothing to say yet
+        audioStatus.textContent = "פעיל — ממתין לנתונים...";
+        return;
+      }
+
+      if (angleDeg !== null) {
+        speakClock(clockTxt, () => {
+          // Small pause after speech before beeps
+          setTimeout(() => playBeeps(n, freq, () => {}), 300);
+        });
+      } else {
+        playBeeps(n, freq, () => {});
+      }
+    }
+
+    function startCycle() {
+      if (cycleTimer) return;
+      runCycle();                                     // fire immediately
+      cycleTimer = setInterval(runCycle, CYCLE_MS);
+    }
+
+    function stopCycle() {
+      if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
+      if (window.speechSynthesis) speechSynthesis.cancel();
     }
 
     function toggleMute() {
       if (isMuted) {
-        // First activation — create AudioContext (requires user gesture)
+        // Create AudioContext inside user-gesture (iOS requirement)
         if (!audioCtx) {
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          } catch (e) {
+            audioStatus.textContent = "שגיאה: הדפדפן לא תומך ב-Web Audio";
+            return;
+          }
+          masterGain = audioCtx.createGain();
+          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          masterGain.connect(audioCtx.destination);
         }
-        if (audioCtx.state === "suspended") audioCtx.resume();
-        isMuted = false;
-        muteBtn.textContent = "🔇 השתק חיווי קולי";
-        muteBtn.classList.remove("muted");
-        audioStatus.textContent = "פעיל — ממתין לטלפון שני";
-        startBeeping();
+        // iOS unlock trick: play silent buffer synchronously
+        try {
+          const buf = audioCtx.createBuffer(1, 1, 22050);
+          const src = audioCtx.createBufferSource();
+          src.buffer = buf; src.connect(audioCtx.destination); src.start(0);
+        } catch(e) {}
+
+        const activate = () => {
+          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          isMuted = false;
+          muteBtn.textContent = "🔇 השתק חיווי קולי";
+          muteBtn.classList.remove("muted");
+          volumeSection.classList.add("visible");
+          startCycle();
+        };
+
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume().then(activate).catch(() => {
+            audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
+          });
+        } else {
+          activate();
+        }
+
       } else {
         isMuted = true;
         muteBtn.textContent = "🔊 השמע חיווי קולי";
         muteBtn.classList.add("muted");
         audioStatus.textContent = "כבוי";
-        stopBeeping();
+        stopCycle();
+        volumeSection.classList.remove("visible");
       }
     }
+
+    // Resume cycle when tab becomes visible again
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && audioCtx && !isMuted) {
+        audioCtx.resume().then(() => { if (!cycleTimer) startCycle(); }).catch(() => {});
+      }
+    });
 
     // Initial log render
     refreshLog("הדף נטען");
