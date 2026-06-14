@@ -878,6 +878,7 @@
       const rawRelative = (lastBearing - myHeading + 360) % 360;
       calibrationOffset = rawRelative;
       isCalibrated = true;
+      arrowCurrentDeg = 0;   // reset unwrap baseline — arrow will point straight up (0°)
       overlay.style.display = "none";
       calBadge.style.display = "block";
       updateArrow();
@@ -1080,17 +1081,37 @@
     }
 
     // ── Arrow / angle ─────────────────────────────────────────────────
+    // Track cumulative rotation so the CSS transition always takes the short path
+    // across the 0°/360° boundary (avoids the 358°-spin-the-wrong-way bug).
+    let arrowCurrentDeg = 0;   // last value fed to CSS transform (unbounded integer)
+
+    function shortestRotation(from, to) {
+      // Returns the new cumulative angle closest to 'from', never more than 180° away
+      let diff = ((to - from) % 360 + 360) % 360;  // 0–359
+      if (diff > 180) diff -= 360;                  // now -180 to +180
+      return from + diff;
+    }
+
     function updateArrow() {
       if (lastBearing === null) return;
 
+      let displayAngle;
       if (myHeading !== null) {
         const rawRelative  = (lastBearing - myHeading + 360) % 360;
-        const displayAngle = (rawRelative - calibrationOffset + 360) % 360;
-        angleEl.textContent = Math.round(displayAngle);
-        arrowEl.style.transform = `rotate(${displayAngle}deg)`;
+        displayAngle = (rawRelative - calibrationOffset + 360) % 360;
       } else {
-        angleEl.textContent = Math.round(lastBearing) + " (צפון)";
-        arrowEl.style.transform = `rotate(${lastBearing}deg)`;
+        displayAngle = (lastBearing + 360) % 360;
+      }
+
+      // Unwrap: pick the shortest path from the previous cumulative angle
+      arrowCurrentDeg = shortestRotation(arrowCurrentDeg, displayAngle);
+      arrowEl.style.transform = `rotate(${arrowCurrentDeg}deg)`;
+
+      const display0to360 = ((displayAngle % 360) + 360) % 360;
+      if (myHeading !== null) {
+        angleEl.textContent = Math.round(display0to360);
+      } else {
+        angleEl.textContent = Math.round(display0to360) + " (צפון)";
       }
     }
 
