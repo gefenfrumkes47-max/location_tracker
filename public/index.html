@@ -913,7 +913,7 @@
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && audioCtx && !isMuted) {
         audioCtx.resume().then(() => {
-          if (!beepLoopActive) startBeeping();
+          if (!cycleTimer) startCycle();
         }).catch(() => {});
       }
     });
@@ -1133,12 +1133,6 @@
       return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
     }
 
-    // ── Audio engine ──────────────────────────────────────────────────
-    // Every 5 seconds:
-    //  1. Speech: clock-position of other boat (e.g. "שתיים" for 2 o'clock)
-    //  2. N beeps where N = Math.round(distance / 7), min 1
-    //     Each beep: HIGH freq if other tilt is right, LOW if left
-    // Cross-platform (iOS Safari, Android Chrome, desktop).
 
     const muteBtn     = document.getElementById("mute-btn");
     const audioStatus = document.getElementById("audio-status");
@@ -1208,18 +1202,62 @@
       return true;
     }
 
-    // Speak the clock position using SpeechSynthesis, then run callback
+    // Speak the clock position — cross-platform strategy:
+    // SpeechSynthesis is unreliable on Android Chrome when the page is in background
+    // or when voices haven't loaded yet. We:
+    //  1. Wait for voices to load (voiceschanged event)
+    //  2. Prefer a Hebrew voice but fall back to any available voice
+    //  3. Set a hard timeout: if onend doesn't fire within 4s, call onDone anyway
+    //     so the beeps always play regardless of speech engine behaviour
+    let _speechVoices = [];
+    function _loadVoices() {
+      _speechVoices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+    }
+    if (window.speechSynthesis) {
+      _loadVoices();
+      speechSynthesis.addEventListener("voiceschanged", _loadVoices);
+    }
+
     function speakClock(clockWord, onDone) {
-      if (!window.speechSynthesis) { onDone(); return; }
-      // Cancel any leftover speech
+      // Fallback: if no SpeechSynthesis, skip straight to beeps
+      if (!window.speechSynthesis) { setTimeout(onDone, 0); return; }
+
       speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(clockWord);
-      utt.lang = "he-IL";
-      utt.rate = 1.1;
-      utt.volume = masterVolume;
-      utt.onend   = () => onDone();
-      utt.onerror = () => onDone();
-      speechSynthesis.speak(utt);
+
+      // Small delay after cancel() — needed on some Android versions
+      setTimeout(() => {
+        const utt = new SpeechSynthesisUtterance(clockWord);
+        utt.lang   = "he-IL";
+        utt.rate   = 1.1;
+        utt.volume = masterVolume;
+
+        // Pick best available voice
+        const heVoice = _speechVoices.find(v => v.lang.startsWith("he"));
+        if (heVoice) utt.voice = heVoice;
+
+        let done = false;
+        function finish() {
+          if (done) return;
+          done = true;
+          onDone();
+        }
+
+        utt.onend   = finish;
+        utt.onerror = finish;
+
+        // Hard safety timeout — Android Chrome sometimes never fires onend
+        // when the app is backgrounded or the TTS engine stalls
+        const guard = setTimeout(finish, 4000);
+        utt.onend = () => { clearTimeout(guard); finish(); };
+
+        // Android Chrome bug: speech is silently dropped if you call speak()
+        // while the context is suspended. Resume AudioContext first (no-op on iOS).
+        if (audioCtx && audioCtx.state === "suspended") {
+          audioCtx.resume().catch(() => {}).finally(() => speechSynthesis.speak(utt));
+        } else {
+          speechSynthesis.speak(utt);
+        }
+      }, 80);
     }
 
     // Play a sequence of N beeps, then call onDone
