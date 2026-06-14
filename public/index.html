@@ -1198,181 +1198,193 @@
     function ensureAudioReady() {
       if (!audioCtx) return false;
       if (audioCtx.state === "closed") return false;
-      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
-      return true;
+      return true;   // even if suspended — callers must await resumeAudio() before scheduling
     }
 
-    // Speak the clock position — cross-platform strategy:
-    // SpeechSynthesis is unreliable on Android Chrome when the page is in background
-    // or when voices haven't loaded yet. We:
-    //  1. Wait for voices to load (voiceschanged event)
-    //  2. Prefer a Hebrew voice but fall back to any available voice
-    //  3. Set a hard timeout: if onend doesn't fire within 4s, call onDone anyway
-    //     so the beeps always play regardless of speech engine behaviour
-    let _speechVoices = [];
-    function _loadVoices() {
-      _speechVoices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+    // Returns a Promise that resolves once AudioContext is truly running.
+    // Must be called (and awaited) before scheduling any Web Audio nodes,
+    // especially after TTS on iOS which steals and releases the audio session.
+    function resumeAudio() {
+      if (!audioCtx || audioCtx.state === "closed") return Promise.reject();
+      if (audioCtx.state === "running") return Promise.resolve();
+      return audioCtx.resume();
+    }
+
+    // ── Voice detection ───────────────────────────────────────────────
+    // Check once whether a Hebrew TTS voice is actually available.
+    // If not, we skip speech entirely and go straight to beeps.
+    let _heVoice   = null;   // the chosen Hebrew voice, or null
+    let _voiceReady = false; // true once we've finished looking
+
+    function _detectVoice() {
+      if (!window.speechSynthesis) { _voiceReady = true; return; }
+      const voices = speechSynthesis.getVoices();
+      if (voices.length === 0) return;  // not loaded yet — wait for voiceschanged
+      _heVoice   = voices.find(v => v.lang.startsWith("he")) || null;
+      _voiceReady = true;
     }
     if (window.speechSynthesis) {
-      _loadVoices();
-      speechSynthesis.addEventListener("voiceschanged", _loadVoices);
+      _detectVoice();
+      speechSynthesis.addEventListener("voiceschanged", _detectVoice);
+    } else {
+      _voiceReady = true;
     }
 
+    // ── TTS — speak one word, then call onDone ────────────────────────
+    // Skips silently if no Hebrew voice found (Android/Windows without he pack).
+    // Guards against onend never firing (iOS after audio session hand-back).
     function speakClock(clockWord, onDone) {
-      // Fallback: if no SpeechSynthesis, skip straight to beeps
-      if (!window.speechSynthesis) { setTimeout(onDone, 0); return; }
+      // No Hebrew voice available → skip TTS, go straight to beeps
+      if (!_voiceReady || !_heVoice) { setTimeout(onDone, 0); return; }
 
       speechSynthesis.cancel();
 
-      // Small delay after cancel() — needed on some Android versions
+      // Brief delay: Chromium needs a tick after cancel() before a new speak()
       setTimeout(() => {
         const utt = new SpeechSynthesisUtterance(clockWord);
-        utt.lang   = "he-IL";
+        utt.voice  = _heVoice;
+        utt.lang   = _heVoice.lang;
         utt.rate   = 1.1;
         utt.volume = masterVolume;
 
-        // Pick best available voice
-        const heVoice = _speechVoices.find(v => v.lang.startsWith("he"));
-        if (heVoice) utt.voice = heVoice;
-
-        let done = false;
-        function finish() {
-          if (done) return;
-          done = true;
-          onDone();
+        let called = false;
+        function done() {
+          if (called) return;
+          called = true;
+          // iOS: after TTS the audio session may be handed back to us,
+          // but AudioContext is left suspended. Resume it now, BEFORE onDone
+          // triggers playBeeps, so nodes have a live context to schedule into.
+          resumeAudio().catch(() => {}).finally(onDone);
         }
 
-        utt.onend   = finish;
-        utt.onerror = finish;
+        utt.onend   = done;
+        utt.onerror = done;
+        // Safety net: if onend never fires (iOS timing quirk), continue after 4s
+        const guard = setTimeout(done, 4000);
+        const _origDone = done;
+        // Clear the guard if we finish normally
+        utt.onend = () => { clearTimeout(guard); _origDone(); };
+        utt.onerror = () => { clearTimeout(guard); _origDone(); };
 
-        // Hard safety timeout — Android Chrome sometimes never fires onend
-        // when the app is backgrounded or the TTS engine stalls
-        const guard = setTimeout(finish, 4000);
-        utt.onend = () => { clearTimeout(guard); finish(); };
-
-        // Android Chrome bug: speech is silently dropped if you call speak()
-        // while the context is suspended. Resume AudioContext first (no-op on iOS).
-        if (audioCtx && audioCtx.state === "suspended") {
-          audioCtx.resume().catch(() => {}).finally(() => speechSynthesis.speak(utt));
-        } else {
-          speechSynthesis.speak(utt);
-        }
-      }, 80);
+        speechSynthesis.speak(utt);
+      }, 60);
     }
 
-    // Play a sequence of N beeps, then call onDone
+    // ── Beeps — all scheduled upfront via Web Audio clock ────────────
+    // No setTimeout for inter-beep timing — avoids iOS throttling.
+    // All N oscillators are created and started at precise future times
+    // before the first beep plays, so timing is exact.
     function playBeeps(n, freq, onDone) {
-      if (!ensureAudioReady() || n <= 0) { onDone(); return; }
-      let i = 0;
-      function nextBeep() {
-        if (isMuted || i >= n) { onDone(); return; }
-        try {
-          const now = audioCtx.currentTime;
-          const osc = audioCtx.createOscillator();
-          const amp = audioCtx.createGain();
+      if (!audioCtx || n <= 0) { onDone(); return; }
+
+      resumeAudio().then(() => {
+        if (isMuted) { onDone(); return; }
+        const stepDur = BEEP_DUR + BEEP_PAUSE;  // seconds per beep slot
+        const t0      = audioCtx.currentTime + 0.05; // small safety margin
+
+        for (let i = 0; i < n; i++) {
+          const t    = t0 + i * stepDur;
+          const osc  = audioCtx.createOscillator();
+          const amp  = audioCtx.createGain();
           osc.connect(amp);
           amp.connect(masterGain);
           osc.type = "sine";
-          osc.frequency.setValueAtTime(freq, now);
-          amp.gain.setValueAtTime(0, now);
-          amp.gain.linearRampToValueAtTime(masterVolume, now + 0.012);
-          amp.gain.setValueAtTime(masterVolume, now + BEEP_DUR - 0.025);
-          amp.gain.linearRampToValueAtTime(0, now + BEEP_DUR);
-          osc.start(now);
-          osc.stop(now + BEEP_DUR);
-          osc.onended = () => {
-            osc.disconnect(); amp.disconnect();
-            i++;
-            setTimeout(nextBeep, BEEP_PAUSE * 1000);
-          };
-        } catch(e) { onDone(); }
-      }
-      nextBeep();
+          osc.frequency.setValueAtTime(freq, t);
+          amp.gain.setValueAtTime(0,            t);
+          amp.gain.linearRampToValueAtTime(masterVolume, t + 0.012);
+          amp.gain.setValueAtTime(masterVolume, t + BEEP_DUR - 0.025);
+          amp.gain.linearRampToValueAtTime(0,   t + BEEP_DUR);
+          osc.start(t);
+          osc.stop(t + BEEP_DUR);
+          osc.onended = () => { osc.disconnect(); amp.disconnect(); };
+        }
+
+        // Fire onDone after the last beep finishes
+        const totalDur = (n * stepDur - BEEP_PAUSE + 0.1) * 1000;
+        setTimeout(onDone, totalDur);
+
+      }).catch(() => { onDone(); });
     }
 
-    // Run one full cycle: speech → beeps
+    // ── Cycle: TTS → beeps every 5 seconds ───────────────────────────
     function runCycle() {
-      if (isMuted || !ensureAudioReady()) return;
+      if (isMuted) return;
+      if (!audioCtx || audioCtx.state === "closed") return;
 
-      const angleDeg = getCurrentAngleDeg();
-      const metres   = getCurrentMetres();
+      const angleDeg      = getCurrentAngleDeg();
+      const metres        = getCurrentMetres();
       const effectiveSide = otherTiltSide !== 0
         ? otherTiltSide
         : (otherTilt !== null ? (otherTilt > 0 ? 1 : -1) : 0);
 
-      const n     = distanceToBeeps(metres);
-      const freq  = effectiveSide >= 0 ? FREQ_HIGH : FREQ_LOW;
-
-      // Build status text
-      const clockTxt  = angleDeg !== null ? angleToClock(angleDeg) : "--";
-      const beepTxt   = metres !== null ? `${n} צפצופים (${Math.round(metres)} מ׳)` : `${n} צפצופים`;
-      const tiltTxt   = effectiveSide > 0 ? `גבוה (${FREQ_HIGH} Hz)` : effectiveSide < 0 ? `נמוך (${FREQ_LOW} Hz)` : "ישר";
-      audioStatus.textContent = `שעה: ${clockTxt} | ${beepTxt} | תדר: ${tiltTxt}`;
+      const n        = distanceToBeeps(metres);
+      const freq     = effectiveSide >= 0 ? FREQ_HIGH : FREQ_LOW;
+      const clockNum = angleDeg !== null ? angleToClock(angleDeg) : null;
+      const clockTxt = clockNum !== null ? clockNum.toString() : "--";
+      const beepTxt  = metres !== null ? `${n} צפצופים (${Math.round(metres)} מ׳)` : `${n} צפצופים`;
+      const tiltTxt  = effectiveSide > 0 ? `גבוה (${FREQ_HIGH}Hz)` : effectiveSide < 0 ? `נמוך (${FREQ_LOW}Hz)` : "ישר";
+      const ttsTxt   = _heVoice ? `שעה: ${clockTxt}` : "ללא TTS";
+      audioStatus.textContent = `${ttsTxt} | ${beepTxt} | ${tiltTxt}`;
 
       if (angleDeg === null && metres === null) {
-        // Nothing to say yet
         audioStatus.textContent = "פעיל — ממתין לנתונים...";
         return;
       }
 
-      if (angleDeg !== null) {
+      if (clockNum !== null && _heVoice) {
         speakClock(clockTxt, () => {
-          // Small pause after speech before beeps
-          setTimeout(() => playBeeps(n, freq, () => {}), 300);
+          setTimeout(() => { if (!isMuted) playBeeps(n, freq, () => {}); }, 200);
         });
       } else {
-        playBeeps(n, freq, () => {});
+        resumeAudio().then(() => { if (!isMuted) playBeeps(n, freq, () => {}); }).catch(() => {});
       }
     }
 
     function startCycle() {
       if (cycleTimer) return;
-      runCycle();                                     // fire immediately
+      runCycle();
       cycleTimer = setInterval(runCycle, CYCLE_MS);
     }
 
     function stopCycle() {
       if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
-      if (window.speechSynthesis) speechSynthesis.cancel();
+      try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch(e) {}
     }
 
     function toggleMute() {
       if (isMuted) {
-        // Create AudioContext inside user-gesture (iOS requirement)
         if (!audioCtx) {
           try {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          } catch (e) {
+          } catch(e) {
             audioStatus.textContent = "שגיאה: הדפדפן לא תומך ב-Web Audio";
             return;
           }
           masterGain = audioCtx.createGain();
-          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
           masterGain.connect(audioCtx.destination);
         }
-        // iOS unlock trick: play silent buffer synchronously
+
+        // iOS: play a real (silent) buffer synchronously inside the tap handler
+        // to unlock the AudioContext. Must happen before any await/Promise.
         try {
           const buf = audioCtx.createBuffer(1, 1, 22050);
           const src = audioCtx.createBufferSource();
-          src.buffer = buf; src.connect(audioCtx.destination); src.start(0);
+          src.buffer = buf;
+          src.connect(audioCtx.destination);
+          src.start(0);
         } catch(e) {}
 
-        const activate = () => {
+        audioCtx.resume().then(() => {
           masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
           isMuted = false;
           muteBtn.textContent = "🔇 השתק חיווי קולי";
           muteBtn.classList.remove("muted");
           volumeSection.classList.add("visible");
+          audioStatus.textContent = _heVoice ? "פעיל (TTS + צפצופים)" : "פעיל (צפצופים בלבד — אין קול עברי)";
           startCycle();
-        };
-
-        if (audioCtx.state === "suspended") {
-          audioCtx.resume().then(activate).catch(() => {
-            audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
-          });
-        } else {
-          activate();
-        }
+        }).catch(() => {
+          audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
+        });
 
       } else {
         isMuted = true;
@@ -1390,7 +1402,6 @@
         audioCtx.resume().then(() => { if (!cycleTimer) startCycle(); }).catch(() => {});
       }
     });
-
     // Initial log render
     refreshLog("הדף נטען");
   </script>
