@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>מאתר מיקום</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      color: #a78bfa;
+      margin-bottom: 28px;
+      letter-spacing: 0.05em;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2d2d4e;
+      border-radius: 16px;
+      padding: 24px;
+      width: 100%;
+      max-width: 340px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b6b9a;
+      margin-bottom: 12px;
+    }
+
+    .value {
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .unit {
+      font-size: 1rem;
+      color: #6b6b9a;
+      margin-right: 6px;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ef4444;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .status-dot.connected { background: #22c55e; }
+
+    #status-text { font-size: 0.9rem; color: #9ca3af; }
+
+    /* compass / arrow */
+    .compass { width: 120px; height: 120px; margin: 12px auto 0; }
+    .compass svg { width: 100%; height: 100%; }
+    #arrow { transform-origin: 60px 60px; transition: transform 0.5s ease; }
+
+    /* calibration overlay */
+    #calibration-overlay {
+      position: fixed; inset: 0;
+      background: rgba(10,10,20,0.97);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 100; padding: 32px; text-align: center;
+    }
+    #calibration-overlay h2 { font-size: 1.3rem; color: #a78bfa; margin-bottom: 16px; }
+    #calibration-overlay p  { font-size: 0.95rem; color: #9ca3af; line-height: 1.6; margin-bottom: 24px; max-width: 280px; }
+
+    .cal-illustration {
+      font-size: 3rem; margin-bottom: 24px;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:0.6; transform:scale(0.92); }
+    }
+
+    #calibrate-btn {
+      padding: 14px 32px; background: #a78bfa; color: #fff;
+      border: none; border-radius: 12px; font-size: 1.05rem; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.03em;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #calibrate-btn:active   { transform: scale(0.96); background: #7c3aed; }
+    #calibrate-btn:disabled { background: #4b5563; cursor: default; }
+
+    #cal-readiness { font-size: 0.8rem; color: #6b6b9a; margin-top: 14px; }
+    #cal-readiness .ready     { color: #22c55e; }
+    #cal-readiness .not-ready { color: #ef4444; }
+
+    #skip-cal {
+      margin-top: 18px; background: none; border: none;
+      color: #4b5563; font-size: 0.8rem; cursor: pointer; text-decoration: underline;
+    }
+
+    /* small outline button */
+    .small-btn {
+      margin-top: 12px; padding: 7px 14px;
+      background: transparent; color: #a78bfa;
+      border: 1px solid #a78bfa; border-radius: 8px;
+      font-size: 0.82rem; cursor: pointer; transition: background 0.2s;
+    }
+    .small-btn:hover { background: rgba(167,139,250,0.12); }
+
+    #compass-permission-btn {
+      display: none; margin-top: 10px; padding: 8px 16px;
+      background: #a78bfa; color: #fff; border: none;
+      border-radius: 8px; font-size: 0.9rem; cursor: pointer;
+    }
+
+    #heading-status   { font-size: 0.75rem; color: #6b6b9a; margin-top: 6px; text-align: center; }
+    #calibration-badge{ display: none; font-size: 0.72rem; color: #22c55e; margin-top: 4px; text-align: center; }
+
+    /* ── Tilt card – side by side ── */
+    .tilt-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 14px;
+    }
+    .tilt-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+    }
+    .tilt-col-label {
+      font-size: 0.7rem;
+      color: #6b6b9a;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+    .tilt-value-row {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .tilt-dir-label {
+      font-size: 0.7rem;
+      color: #9ca3af;
+      margin-bottom: 8px;
+    }
+    /* the phone SVG lives inside each col */
+    .tilt-scene {
+      width: 110px;
+      height: 50px;
+    }
+    /* dim "other" when unavailable */
+    .tilt-col.unavailable .tilt-value-row { color: #4b5563; }
+    .tilt-col.unavailable .tilt-dir-label { color: #4b5563; }
+    .tilt-col-divider {
+      width: 1px;
+      background: #2d2d4e;
+      align-self: stretch;
+    }
+
+    /* log box */
+    #log-box {
+      background: #111120;
+      border: 1px solid #2d2d4e;
+      border-radius: 12px;
+      padding: 14px 16px;
+      width: 100%;
+      max-width: 340px;
+      margin-top: 4px;
+      margin-bottom: 8px;
+      font-size: 0.7rem;
+      color: #6b6b9a;
+      line-height: 1.8;
+    }
+    #log-box .log-row { display: flex; justify-content: space-between; gap: 8px; }
+    #log-box .log-key { color: #4b5563; white-space: nowrap; }
+    #log-box .log-val { color: #a78bfa; font-weight: 600; text-align: left; direction: ltr; }
+    #log-box .log-val.dim { color: #4b5563; font-weight: 400; }
+    #log-box .log-section { color: #2d2d4e; font-size: 0.62rem; margin: 4px 0 2px; letter-spacing: 0.08em; }
+
+    /* ── Wind type selector ── */
+    .wind-section {
+      width: 100%;
+      max-width: 340px;
+      margin-bottom: 12px;
+    }
+    .wind-section-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b6b9a;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .wind-btn-group {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .wind-btn {
+      flex: 1;
+      padding: 11px 8px;
+      background: #1a1a2e;
+      color: #9ca3af;
+      border: 1px solid #2d2d4e;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, border-color 0.18s;
+      text-align: center;
+    }
+    .wind-btn:active { transform: scale(0.96); }
+    .wind-btn.selected-blue {
+      background: #1e3a5f;
+      color: #60a5fa;
+      border-color: #3b82f6;
+    }
+    .wind-btn.selected-green {
+      background: #14532d;
+      color: #4ade80;
+      border-color: #22c55e;
+    }
+    .wind-required-hint {
+      font-size: 0.7rem;
+      color: #ef4444;
+      text-align: center;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
+    /* record button */
+    #record-btn {
+      margin-top: 12px; padding: 14px 32px;
+      background: #22c55e; color: #fff; border: none;
+      border-radius: 12px; font-size: 1.05rem; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.03em;
+      transition: background 0.2s, transform 0.1s;
+      width: 100%; max-width: 340px;
+    }
+    #record-btn:active { transform: scale(0.96); }
+    #record-btn.recording { background: #ef4444; animation: rec-pulse 1.4s ease-in-out infinite; }
+    @keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:0.75} }
+
+    #record-count { font-size: 0.78rem; color: #6b6b9a; margin-top: 8px; text-align: center; }
+
+    /* ── Mute button ── */
+    #mute-btn {
+      margin-top: 12px; padding: 12px 24px;
+      background: #1a1a2e; color: #a78bfa;
+      border: 1px solid #a78bfa; border-radius: 12px;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      width: 100%; max-width: 340px;
+      transition: background 0.2s, color 0.2s;
+      letter-spacing: 0.03em;
+    }
+    #mute-btn.muted {
+      background: #1a1a2e; color: #4b5563;
+      border-color: #2d2d4e;
+    }
+    #audio-status {
+      font-size: 0.72rem; color: #4b5563;
+      margin-top: 6px; text-align: center;
+    }
+
+    /* ── Tilt calibration ── */
+    #tilt-cal-btn {
+      margin-top: 12px; padding: 9px 18px;
+      background: transparent; color: #34d399;
+      border: 1px solid #34d399; border-radius: 8px;
+      font-size: 0.85rem; font-weight: 600; cursor: pointer;
+      width: 100%; transition: background 0.2s;
+    }
+    #tilt-cal-btn:hover   { background: rgba(52,211,153,0.1); }
+    #tilt-cal-btn.running { background: rgba(52,211,153,0.15); color: #6ee7b7; cursor: default; border-color: #6ee7b7; }
+    #tilt-cal-btn.done    { background: rgba(52,211,153,0.2);  color: #34d399; border-color: #34d399; }
+
+    #tilt-cal-progress-wrap {
+      display: none;
+      margin-top: 8px;
+      height: 6px;
+      background: #2d2d4e;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    #tilt-cal-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #34d399;
+      border-radius: 3px;
+      transition: width 0.5s linear;
+    }
+    #tilt-cal-status {
+      font-size: 0.72rem; color: #6b6b9a;
+      margin-top: 5px; text-align: center;
+    }
+
+    /* ── Volume slider ── */
+    .volume-section {
+      width: 100%; max-width: 340px;
+      margin-top: 10px;
+      display: none; /* shown when audio is active */
+    }
+    .volume-section.visible { display: block; }
+    .volume-label-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.75rem; color: #6b6b9a; margin-bottom: 6px;
+    }
+    .volume-label-row span { color: #a78bfa; font-weight: 700; font-size: 0.85rem; }
+    #volume-slider {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 6px;
+      border-radius: 3px;
+      background: linear-gradient(to right, #a78bfa 0%, #a78bfa var(--vol-pct, 80%), #2d2d4e var(--vol-pct, 80%), #2d2d4e 100%);
+      outline: none; cursor: pointer;
+    }
+    #volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #a78bfa; border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(167,139,250,0.5);
+      cursor: pointer;
+    }
+    #volume-slider::-moz-range-thumb {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #a78bfa; border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(167,139,250,0.5);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Calibration overlay ── -->
+  <div id="calibration-overlay">
+    <div class="cal-illustration">📱↔️📱</div>
+    <h2>כיול כיוון</h2>
+    <p>
+      עמדו מול הטלפון השני וכוונו את הטלפון ישירות אליו.<br><br>
+      לחצו על הכפתור ברגע שאתם מכוונים ישירות אל הטלפון השני.
+    </p>
+    <div id="cal-readiness">
+      <span id="cal-gps"     class="not-ready">⬤ GPS</span>&nbsp;
+      <span id="cal-other"   class="not-ready">⬤ טלפון שני</span>&nbsp;
+      <span id="cal-compass" class="not-ready">⬤ מצפן</span>
+    </div>
+    <br>
+    <button id="calibrate-btn" onclick="doCalibrate()" disabled>כייל עכשיו</button>
+    <button id="skip-cal" onclick="skipCalibration()">דלג על כיול</button>
+  </div>
+
+  <h1>📡 מאתר מיקום בזמן אמת</h1>
+
+  <!-- Status -->
+  <div class="card">
+    <h2>סטטוס חיבור</h2>
+    <span id="status-text">מתחבר...</span>
+    <span class="status-dot" id="dot"></span>
+  </div>
+
+  <!-- My location -->
+  <div class="card">
+    <h2>המיקום שלי</h2>
+    <div id="my-location" class="value" style="font-size:1rem;color:#9ca3af;">ממתין ל-GPS...</div>
+  </div>
+
+  <!-- Distance (needs other phone) -->
+  <div class="card">
+    <h2>מרחק מהטלפון השני</h2>
+    <div>
+      <span class="value" id="distance">--</span>
+      <span class="unit" id="dist-unit">מטרים</span>
+    </div>
+  </div>
+
+  <!-- Angle to other phone -->
+  <div class="card">
+    <h2>כיוון לטלפון השני</h2>
+    <div>
+      <span class="value" id="angle">--</span>
+      <span class="unit">°</span>
+    </div>
+    <div id="heading-status">ממתין לחיישן כיוון...</div>
+    <div id="calibration-badge">✓ מכויל</div>
+    <button id="compass-permission-btn" onclick="requestCompassPermission()">אפשר גישה לחיישן</button>
+    <div class="compass">
+      <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="60" cy="60" r="55" fill="none" stroke="#2d2d4e" stroke-width="2"/>
+        <text x="60" y="14"  text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="bold">קדימה</text>
+        <text x="60" y="112" text-anchor="middle" fill="#6b6b9a" font-size="10">אחורה</text>
+        <text x="108" y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">ימין</text>
+        <text x="12"  y="64" text-anchor="middle" fill="#6b6b9a" font-size="10">שמאל</text>
+        <g id="arrow">
+          <polygon points="60,15 65,60 60,55 55,60" fill="#a78bfa"/>
+          <polygon points="60,105 65,60 60,65 55,60" fill="#4b5563"/>
+        </g>
+      </svg>
+    </div>
+    <button class="small-btn" onclick="showCalibrationOverlay()">כייל מחדש</button>
+  </div>
+
+  <!-- ── Tilt card: MY phone + OTHER phone side by side ── -->
+  <div class="card">
+    <h2>הטיית הטלפון</h2>
+    <div class="tilt-row">
+
+      <!-- My tilt -->
+      <div class="tilt-col" id="my-tilt-col">
+        <div class="tilt-col-label">הטלפון שלי</div>
+        <div class="tilt-value-row"><span id="my-tilt-val">--</span><span style="font-size:1rem;color:#6b6b9a;">°</span></div>
+        <div class="tilt-dir-label" id="my-tilt-dir">ממתין לחיישן...</div>
+        <svg class="tilt-scene" viewBox="0 0 110 50" xmlns="http://www.w3.org/2000/svg">
+          <rect x="3" y="22" width="104" height="6" rx="3" fill="#2d2d4e"/>
+          <line x1="55" y1="16" x2="55" y2="34" stroke="#4b5563" stroke-width="1.5"/>
+          <g id="my-tilt-phone" transform="translate(55,25)">
+            <rect x="-9" y="-14" width="18" height="28" rx="3" fill="#a78bfa"/>
+            <rect x="-5" y="-10" width="10" height="19" rx="2" fill="#0f0f1a"/>
+            <circle cx="0" cy="11" r="2" fill="#6b6b9a"/>
+          </g>
+        </svg>
+      </div>
+
+      <div class="tilt-col-divider"></div>
+
+      <!-- Other phone's tilt -->
+      <div class="tilt-col unavailable" id="other-tilt-col">
+        <div class="tilt-col-label">טלפון שני</div>
+        <div class="tilt-value-row"><span id="other-tilt-val">--</span><span style="font-size:1rem;color:#6b6b9a;">°</span></div>
+        <div class="tilt-dir-label" id="other-tilt-dir">ממתין לטלפון שני...</div>
+        <svg class="tilt-scene" viewBox="0 0 110 50" xmlns="http://www.w3.org/2000/svg">
+          <rect x="3" y="22" width="104" height="6" rx="3" fill="#2d2d4e"/>
+          <line x1="55" y1="16" x2="55" y2="34" stroke="#4b5563" stroke-width="1.5"/>
+          <g id="other-tilt-phone" transform="translate(55,25)">
+            <rect x="-9" y="-14" width="18" height="28" rx="3" fill="#4b5563"/>
+            <rect x="-5" y="-10" width="10" height="19" rx="2" fill="#0f0f1a"/>
+            <circle cx="0" cy="11" r="2" fill="#2d2d4e"/>
+          </g>
+        </svg>
+      </div>
+
+    </div>
+    <!-- Tilt calibration -->
+    <button id="tilt-cal-btn" onclick="startTiltCalibration()">⚖️ כייל מצב אפס (דקה)</button>
+    <div id="tilt-cal-progress-wrap"><div id="tilt-cal-progress-bar"></div></div>
+    <div id="tilt-cal-status">לא מכויל — הטיה נמדדת יחסית לאפס הגלמי</div>
+  </div>
+
+  <!-- ── Structured log ── -->
+  <div id="log-box">
+    <div class="log-section">── הטלפון שלי ──────────────</div>
+    <div class="log-row"><span class="log-key">GPS</span>           <span class="log-val dim" id="ll-my-gps">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון (צפון)</span>  <span class="log-val dim" id="ll-my-heading">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון (GPS)</span>   <span class="log-val dim" id="ll-my-heading-gps">--</span></div>
+    <div class="log-row"><span class="log-key">הטיה</span>          <span class="log-val dim" id="ll-my-tilt">--</span></div>
+    <div class="log-section">── טלפון שני ───────────────</div>
+    <div class="log-row"><span class="log-key">GPS שני</span>        <span class="log-val dim" id="ll-other-gps">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון שני (צפון)</span><span class="log-val dim" id="ll-other-heading">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון שני (GPS)</span> <span class="log-val dim" id="ll-other-heading-gps">--</span></div>
+    <div class="log-row"><span class="log-key">הטיה שני</span>       <span class="log-val dim" id="ll-other-tilt">--</span></div>
+    <div class="log-section">── מדידה ───────────────────</div>
+    <div class="log-row"><span class="log-key">מרחק</span>           <span class="log-val dim" id="ll-dist">--</span></div>
+    <div class="log-row"><span class="log-key">זווית לשני</span>     <span class="log-val dim" id="ll-angle">--</span></div>
+    <div class="log-row"><span class="log-key">עדכון אחרון</span>   <span class="log-val dim" id="ll-time">--</span></div>
+    <div class="log-section">── סטטוס ───────────────────</div>
+    <div class="log-row" style="flex-wrap:wrap;"><span class="log-val dim" id="ll-event" style="text-align:right;width:100%;"></span></div>
+  </div>
+
+  <!-- ── Wind type selector ── -->
+  <div class="wind-section">
+    <div class="wind-section-label">כיוון המפנה</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-left"  onclick="selectWindDir('מפנה_שמאלי')">מפנה שמאלי</button>
+      <button class="wind-btn" id="wind-right" onclick="selectWindDir('מפנה_ימני')">מפנה ימני</button>
+    </div>
+  </div>
+
+  <div class="wind-section">
+    <div class="wind-section-label">סוג הרוח</div>
+    <div class="wind-btn-group">
+      <button class="wind-btn" id="wind-back"  onclick="selectWindType('גבית')">גבית</button>
+      <button class="wind-btn" id="wind-front" onclick="selectWindType('קדמית')">קדמית</button>
+      <button class="wind-btn" id="wind-side"  onclick="selectWindType('צד')">צד</button>
+      <button class="wind-btn" id="wind-full"  onclick="selectWindType('מלאה')">מלאה</button>
+    </div>
+  </div>
+
+  <div class="wind-required-hint" id="wind-hint"></div>
+
+  <button id="record-btn" onclick="toggleRecording()">⏺ התחל הקלטה</button>
+  <div id="record-count"></div>
+
+  <button id="mute-btn" onclick="toggleMute()">🔊 השמע חיווי קולי</button>
+  <div id="audio-status">כבוי — לחץ להפעלה</div>
+
+  <div class="volume-section" id="volume-section">
+    <div class="volume-label-row">
+      <span>🔈</span>
+      <span id="volume-display">80%</span>
+      <span>🔊</span>
+    </div>
+    <input type="range" id="volume-slider" min="0" max="100" value="80" oninput="onVolumeChange(this.value)">
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+
+    // ── DOM refs ──────────────────────────────────────────────────────
+    const dot             = document.getElementById("dot");
+    const statusText      = document.getElementById("status-text");
+    const distanceEl      = document.getElementById("distance");
+    const distUnitEl      = document.getElementById("dist-unit");
+    const angleEl         = document.getElementById("angle");
+    const arrowEl         = document.getElementById("arrow");
+    const myLocationEl    = document.getElementById("my-location");
+    const headingStatusEl = document.getElementById("heading-status");
+    const permissionBtn   = document.getElementById("compass-permission-btn");
+    const calBadge        = document.getElementById("calibration-badge");
+    const calibrateBtn    = document.getElementById("calibrate-btn");
+    const overlay         = document.getElementById("calibration-overlay");
+    const calGpsEl        = document.getElementById("cal-gps");
+    const calOtherEl      = document.getElementById("cal-other");
+    const calCompassEl    = document.getElementById("cal-compass");
+
+    // Tilt – my phone
+    const myTiltValEl   = document.getElementById("my-tilt-val");
+    const myTiltDirEl   = document.getElementById("my-tilt-dir");
+    const myTiltPhoneEl = document.getElementById("my-tilt-phone");
+    const myTiltColEl   = document.getElementById("my-tilt-col");
+
+    // Tilt – other phone
+    const otherTiltValEl   = document.getElementById("other-tilt-val");
+    const otherTiltDirEl   = document.getElementById("other-tilt-dir");
+    const otherTiltPhoneEl = document.getElementById("other-tilt-phone");
+    const otherTiltColEl   = document.getElementById("other-tilt-col");
+
+    // Log rows
+    const llMyGps           = document.getElementById("ll-my-gps");
+    const llMyHeading       = document.getElementById("ll-my-heading");
+    const llMyHeadingGPS    = document.getElementById("ll-my-heading-gps");
+    const llMyTilt          = document.getElementById("ll-my-tilt");
+    const llOtherGps        = document.getElementById("ll-other-gps");
+    const llOtherHeading    = document.getElementById("ll-other-heading");
+    const llOtherHeadingGPS = document.getElementById("ll-other-heading-gps");
+    const llOtherTilt       = document.getElementById("ll-other-tilt");
+    const llDist            = document.getElementById("ll-dist");
+    const llAngle           = document.getElementById("ll-angle");
+    const llTime            = document.getElementById("ll-time");
+    const llEvent           = document.getElementById("ll-event");
+
+    // Record
+    const recordBtn     = document.getElementById("record-btn");
+    const recordCountEl = document.getElementById("record-count");
+
+    // ── State ─────────────────────────────────────────────────────────
+    let myLat = null, myLng = null;
+    let myHeading = null;       // degrees from North (compass)
+    let myHeadingGPS = null;    // degrees from North (velocity vector)
+    let otherHeadingCompass = null;  // other phone's compass heading
+    let otherHeadingGPS = null;      // other phone's GPS velocity heading
+    let myTilt = null;          // smoothed tilt (10s average, after hysteresis)
+    let myTiltRaw = null;       // latest raw gamma reading
+
+    // Rolling buffer: { value, ts } entries for the last 10 seconds
+    const TILT_WINDOW_MS = 2000;
+    const TILT_HYSTERESIS = 5;  // degrees — must cross ±5° to change side
+    let tiltBuffer = [];        // raw samples in the window
+    let tiltSide = 0;           // -1 left, 0 centre, +1 right (hysteresis state)
+    let tiltZeroOffset = 0;     // calibrated zero: subtracted from every raw reading
+    let lastBearing = null;     // absolute bearing to other phone
+    let otherTilt = null;       // smoothed gamma received from other device
+    let otherTiltSide = 0;      // hysteresis side for other phone (-1/0/+1)
+    let otherLat = null, otherLng = null;
+    let calibrationOffset = 0;
+    let isCalibrated = false;
+    let isRecording = false;
+    let recordedData = [];
+    let recordInterval = null;
+
+    // Wind type state
+    let selectedWindDir  = null;   // 'מפנה_שמאלי' | 'מפנה_ימני'
+    let selectedWindType = null;   // 'גבית' | 'קדמית' | 'צד' | 'מלאה'
+
+    // ── Wind selector functions ───────────────────────────────────────
+    function selectWindDir(val) {
+      selectedWindDir = val;
+      document.getElementById('wind-left').classList.remove('selected-blue');
+      document.getElementById('wind-right').classList.remove('selected-blue');
+      const id = val === 'מפנה_שמאלי' ? 'wind-left' : 'wind-right';
+      document.getElementById(id).classList.add('selected-blue');
+      document.getElementById('wind-hint').textContent = '';
+    }
+
+    function selectWindType(val) {
+      selectedWindType = val;
+      ['wind-back','wind-front','wind-side','wind-full'].forEach(id =>
+        document.getElementById(id).classList.remove('selected-green')
+      );
+      const map = { 'גבית':'wind-back', 'קדמית':'wind-front', 'צד':'wind-side', 'מלאה':'wind-full' };
+      document.getElementById(map[val]).classList.add('selected-green');
+      document.getElementById('wind-hint').textContent = '';
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+    function nowStr() {
+      const n = new Date();
+      return n.toLocaleTimeString("he-IL", { hour12: false }) +
+             "." + String(n.getMilliseconds()).padStart(3, "0");
+    }
+
+    // tiltDir uses the SMOOTHED value (already hysteresis-filtered)
+    function tiltDir(deg) {
+      if (deg === null || deg === undefined) return "--";
+      if (deg < 0) return `${Math.abs(deg)}° שמאל`;
+      if (deg > 0) return `${deg}° ימין`;
+      return "ישר";
+    }
+
+    // ── Tilt smoothing helpers ────────────────────────────────────────
+    function pushTiltSample(raw) {
+      const now = Date.now();
+      // Subtract calibrated zero so the buffer works in offset-corrected space
+      tiltBuffer.push({ value: raw - tiltZeroOffset, ts: now });
+      // Drop samples older than the window
+      tiltBuffer = tiltBuffer.filter(s => now - s.ts <= TILT_WINDOW_MS);
+    }
+
+    function calcSmoothedTilt() {
+      if (tiltBuffer.length === 0) return null;
+      const avg = tiltBuffer.reduce((s, e) => s + e.value, 0) / tiltBuffer.length;
+      return Math.round(avg * 10) / 10;   // one decimal place
+    }
+
+    // Apply hysteresis to the smoothed average.
+    // tiltSide only flips when avg crosses ±TILT_HYSTERESIS from centre.
+    // Returns the display value: positive = right, negative = left, 0 = centre.
+    function applyHysteresis(avg) {
+      if (tiltSide === 0) {
+        // Initial state — first time we cross ±5° we commit to that side
+        if (avg >  TILT_HYSTERESIS) tiltSide =  1;
+        if (avg < -TILT_HYSTERESIS) tiltSide = -1;
+      } else if (tiltSide === 1) {
+        // Currently right — only flip to left if avg drops below -5°
+        if (avg < -TILT_HYSTERESIS) tiltSide = -1;
+        // Never return to 0 once a side is established
+      } else {  // tiltSide === -1
+        // Currently left — only flip to right if avg rises above +5°
+        if (avg >  TILT_HYSTERESIS) tiltSide =  1;
+        // Never return to 0 once a side is established
+      }
+      return avg;
+    }
+
+    // Move a tilt phone SVG element
+    function animateTiltPhone(el, deg) {
+      if (deg === null) { el.setAttribute("transform", "translate(55,25)"); return; }
+      const x = 55 + Math.round((deg / 90) * 46);
+      el.setAttribute("transform", `translate(${x},25) rotate(${deg})`);
+    }
+
+    // ── Tilt calibration (60 second zero baseline) ────────────────────
+    const TILT_CAL_DURATION = 60000;   // ms
+    const TILT_CAL_TICK     =  500;    // UI update interval ms
+    let tiltCalSamples  = [];          // raw gamma collected during cal session
+    let tiltCalInterval = null;        // UI tick interval
+    let tiltCalStart    = null;        // Date.now() when cal started
+
+    const tiltCalBtn     = document.getElementById("tilt-cal-btn");
+    const tiltCalWrap    = document.getElementById("tilt-cal-progress-wrap");
+    const tiltCalBar     = document.getElementById("tilt-cal-progress-bar");
+    const tiltCalStatus  = document.getElementById("tilt-cal-status");
+
+    function startTiltCalibration() {
+      if (tiltCalInterval) return;            // already running
+      tiltCalSamples = [];
+      tiltCalStart   = Date.now();
+
+      tiltCalBtn.classList.add("running");
+      tiltCalBtn.textContent  = "⏳ מכייל... (60 שניות)";
+      tiltCalWrap.style.display = "block";
+      tiltCalBar.style.width    = "0%";
+      tiltCalStatus.textContent = "מודד הטיית בסיס — אל תזיזו את הטלפון";
+
+      tiltCalInterval = setInterval(() => {
+        const elapsed  = Date.now() - tiltCalStart;
+        const pct      = Math.min(100, (elapsed / TILT_CAL_DURATION) * 100);
+        tiltCalBar.style.width = pct.toFixed(1) + "%";
+        const secLeft  = Math.ceil((TILT_CAL_DURATION - elapsed) / 1000);
+        const n        = tiltCalSamples.length;
+        tiltCalStatus.textContent = `מודד... ${secLeft} שניות | ${n} דגימות`;
+
+        if (elapsed >= TILT_CAL_DURATION) {
+          finishTiltCalibration();
+        }
+      }, TILT_CAL_TICK);
+    }
+
+    // Called from handleOrientation while calibration is running
+    function collectCalSample(rawGamma) {
+      if (tiltCalInterval) tiltCalSamples.push(rawGamma);
+    }
+
+    function finishTiltCalibration() {
+      clearInterval(tiltCalInterval);
+      tiltCalInterval = null;
+
+      if (tiltCalSamples.length === 0) {
+        tiltCalStatus.textContent = "כישלון — לא התקבלו דגימות מהחיישן";
+        tiltCalBtn.classList.remove("running");
+        tiltCalBtn.textContent = "⚖️ כייל מצב אפס (דקה)";
+        return;
+      }
+
+      const avg = tiltCalSamples.reduce((s, v) => s + v, 0) / tiltCalSamples.length;
+      tiltZeroOffset = Math.round(avg * 10) / 10;
+
+      // Reset the 10s rolling buffer & hysteresis so they start fresh from new zero
+      tiltBuffer = [];
+      tiltSide   = 0;
+
+      tiltCalBar.style.width = "100%";
+      tiltCalBtn.classList.remove("running");
+      tiltCalBtn.classList.add("done");
+      tiltCalBtn.textContent = `⚖️ כויל מחדש (אפס: ${tiltZeroOffset}°)`;
+      tiltCalStatus.textContent =
+        `✓ כיול הושלם — אפס: ${tiltZeroOffset}° | ${tiltCalSamples.length} דגימות`;
+
+      refreshLog("כיול הטיה הושלם ✓");
+    }
+
+    // ── Log panel update ──────────────────────────────────────────────
+    function setLogVal(el, val, available = true) {
+      el.textContent = val;
+      el.className = available ? "log-val" : "log-val dim";
+    }
+
+    function refreshLog(event = null) {
+      // My phone
+      if (myLat !== null)
+        setLogVal(llMyGps, `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`);
+      else
+        setLogVal(llMyGps, "ממתין ל-GPS...", false);
+
+      if (myHeading !== null)
+        setLogVal(llMyHeading, `${Math.round(myHeading)}°`);
+      else
+        setLogVal(llMyHeading, "ממתין למצפן...", false);
+
+      if (myHeadingGPS !== null)
+        setLogVal(llMyHeadingGPS, `${Math.round(myHeadingGPS)}°`);
+      else
+        setLogVal(llMyHeadingGPS, "ממתין לתנועה...", false);
+
+      if (myTilt !== null)
+        setLogVal(llMyTilt, tiltDir(myTilt));
+      else
+        setLogVal(llMyTilt, "ממתין לחיישן...", false);
+
+      // Other phone
+      if (otherLat !== null)
+        setLogVal(llOtherGps, `${otherLat.toFixed(5)}, ${otherLng.toFixed(5)}`);
+      else
+        setLogVal(llOtherGps, "טרם התקבל", false);
+
+      if (otherHeadingCompass !== null)
+        setLogVal(llOtherHeading, `${Math.round(otherHeadingCompass)}°`);
+      else
+        setLogVal(llOtherHeading, "טרם התקבל", false);
+
+      if (otherHeadingGPS !== null)
+        setLogVal(llOtherHeadingGPS, `${Math.round(otherHeadingGPS)}°`);
+      else
+        setLogVal(llOtherHeadingGPS, "טרם התקבל", false);
+
+      if (otherTilt !== null)
+        setLogVal(llOtherTilt, tiltDir(otherTilt));
+      else
+        setLogVal(llOtherTilt, "טרם התקבל", false);
+
+      // Measurement
+      const distTxt = distanceEl.textContent;
+      setLogVal(llDist, distTxt !== "--" ? distTxt + " " + distUnitEl.textContent : "--", distTxt !== "--");
+
+      const angTxt = angleEl.textContent;
+      setLogVal(llAngle, angTxt !== "--" ? angTxt + "°" : "--", angTxt !== "--");
+
+      setLogVal(llTime, nowStr());
+
+      if (event) llEvent.textContent = event;
+    }
+
+    // ── Recording ────────────────────────────────────────────────────
+    function toggleRecording() {
+      if (!isRecording) {
+        // Validate wind selections
+        if (!selectedWindDir || !selectedWindType) {
+          document.getElementById('wind-hint').textContent =
+            !selectedWindDir && !selectedWindType ? 'יש לבחור כיוון מפנה וסוג רוח לפני ההקלטה' :
+            !selectedWindDir ? 'יש לבחור כיוון מפנה לפני ההקלטה' :
+            'יש לבחור סוג רוח לפני ההקלטה';
+          return;
+        }
+        isRecording = true;
+        recordedData = [];
+        recordBtn.textContent = "⏹ עצור הקלטה";
+        recordBtn.classList.add("recording");
+        recordCountEl.textContent = "מקליט... 0 נקודות";
+        recordInterval = setInterval(logDataPoint, 200); // 5 Hz
+      } else {
+        isRecording = false;
+        clearInterval(recordInterval);
+        recordInterval = null;
+        recordBtn.textContent = "⏺ התחל הקלטה";
+        recordBtn.classList.remove("recording");
+        recordCountEl.textContent = "";
+        downloadCSV();
+      }
+    }
+
+    function logDataPoint() {
+      if (!isRecording) return;
+      const dist = distanceEl.textContent;
+      const ang  = angleEl.textContent;
+      // Log even if no other phone — record what we have
+      recordedData.push({
+        time:               nowStr(),
+        wind_dir:           selectedWindDir  || "",
+        wind_type:          selectedWindType || "",
+        my_lat:             myLat  !== null ? myLat.toFixed(6)  : "",
+        my_lng:             myLng  !== null ? myLng.toFixed(6)  : "",
+        my_heading_compass: myHeading    !== null ? Math.round(myHeading)    : "",
+        my_heading_gps:     myHeadingGPS !== null ? Math.round(myHeadingGPS) : "",
+        my_tilt:            myTilt !== null ? myTilt : "",
+        other_lat:          otherLat  !== null ? otherLat.toFixed(6)  : "",
+        other_lng:          otherLng  !== null ? otherLng.toFixed(6)  : "",
+        other_heading_compass: otherHeadingCompass !== null ? Math.round(otherHeadingCompass) : "",
+        other_heading_gps:     otherHeadingGPS     !== null ? Math.round(otherHeadingGPS)     : "",
+        other_tilt:         otherTilt !== null ? otherTilt : "",
+        distance:           dist !== "--" ? dist : "",
+        angle:              ang  !== "--" ? ang  : "",
+      });
+      recordCountEl.textContent = `מקליט... ${recordedData.length} נקודות`;
+    }
+
+    function downloadCSV() {
+      if (recordedData.length === 0) { recordCountEl.textContent = "אין נתונים להורדה"; return; }
+      const header = "זמן,כיוון_מפנה,סוג_רוח,GPS_שלי_lat,GPS_שלי_lng,כיוון_מצפן_שלי,כיוון_GPS_שלי,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,כיוון_מצפן_שני,כיוון_GPS_שני,הטיה_שני,מרחק,זווית\n";
+      const rows = recordedData.map(r =>
+        `${r.time},${r.wind_dir},${r.wind_type},${r.my_lat},${r.my_lng},${r.my_heading_compass},${r.my_heading_gps},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_heading_compass},${r.other_heading_gps},${r.other_tilt},${r.distance},${r.angle}`
+      ).join("\n");
+      const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const dateStr = new Date().toISOString().slice(0,19).replace(/[T:]/g, "-");
+      const windTag = [selectedWindDir, selectedWindType].filter(Boolean).join("_");
+      a.href = url; a.download = `location-track-${windTag ? windTag + "-" : ""}${dateStr}.csv`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      recordCountEl.textContent = `הורד קובץ עם ${recordedData.length} נקודות ✓`;
+    }
+
+    // ── Calibration ───────────────────────────────────────────────────
+    function updateCalReadiness() {
+      const gpsOk     = myLat !== null && myLng !== null;
+      const otherOk   = lastBearing !== null;
+      const compassOk = myHeading !== null;
+
+      calGpsEl.className     = gpsOk     ? "ready" : "not-ready";
+      calOtherEl.className   = otherOk   ? "ready" : "not-ready";
+      calCompassEl.className = compassOk ? "ready" : "not-ready";
+
+      calibrateBtn.disabled = !(gpsOk && otherOk && compassOk);
+      if (!calibrateBtn.disabled) calibrateBtn.textContent = "כייל עכשיו ✓";
+    }
+
+    function showCalibrationOverlay() {
+      overlay.style.display = "flex";
+      updateCalReadiness();
+    }
+
+    function skipCalibration() {
+      overlay.style.display = "none";
+      calBadge.style.display = "none";
+      refreshLog("כיול דולג");
+    }
+
+    function doCalibrate() {
+      if (myHeading === null || lastBearing === null) return;
+      const rawRelative = (lastBearing - myHeading + 360) % 360;
+      calibrationOffset = rawRelative;
+      isCalibrated = true;
+      arrowCurrentDeg = 0;   // reset unwrap baseline — arrow will point straight up (0°)
+      overlay.style.display = "none";
+      calBadge.style.display = "block";
+      updateArrow();
+      refreshLog("כויל בהצלחה ✓");
+    }
+
+    // ── Socket ────────────────────────────────────────────────────────
+    socket.on("connect", () => {
+      dot.classList.add("connected");
+      statusText.textContent = "מחובר לשרת ✓";
+      refreshLog("התחבר לשרת");
+    });
+    socket.on("disconnect", () => {
+      dot.classList.remove("connected");
+      statusText.textContent = "מנותק";
+      refreshLog("התנתק מהשרת");
+    });
+    socket.on("server-full", (data) => {
+      dot.classList.remove("connected");
+      statusText.textContent = "⛔ " + (data.message || "השרת מלא");
+      refreshLog("חיבור נדחה — השרת מלא");
+    });
+    socket.on("device-count", (data) => {
+      const count = data.count || 0;
+      const label = count === 1 ? "מכשיר אחד מחובר" : `${count} מכשירים מחוברים`;
+      if (!statusText.textContent.startsWith("⛔")) {
+        statusText.textContent = `מחובר לשרת ✓ (${label})`;
+      }
+    });
+
+    // Re-resume AudioContext when page becomes visible again (iOS kills it in bg)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && audioCtx && !isMuted) {
+        audioCtx.resume().then(() => {
+          if (!cycleTimer) startCycle();
+        }).catch(() => {});
+      }
+    });
+
+    // ── GPS ───────────────────────────────────────────────────────────
+    let myLat_ = null; // alias kept for closure; we use myLat/myLng directly
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          myLat = pos.coords.latitude;
+          myLng = pos.coords.longitude;
+          // Velocity-vector heading (null if not moving or unavailable)
+          if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+            myHeadingGPS = pos.coords.heading;
+          }
+          myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide, headingCompass: myHeading, headingGPS: myHeadingGPS });
+          updateCalReadiness();
+          refreshLog("GPS עודכן");
+        },
+        (err) => {
+          myLocationEl.textContent = "שגיאה: " + err.message;
+          refreshLog("שגיאת GPS: " + err.message);
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+      );
+    } else {
+      refreshLog("הדפדפן לא תומך ב-GPS");
+    }
+
+    // ── Device Orientation ────────────────────────────────────────────
+    function startCompass() {
+      if (window.DeviceOrientationEvent) {
+        window.addEventListener("deviceorientationabsolute", handleOrientation, true);
+        window.addEventListener("deviceorientation",         handleOrientation, true);
+      } else {
+        headingStatusEl.textContent = "חיישן כיוון לא זמין במכשיר זה";
+        refreshLog("חיישן כיוון לא זמין");
+      }
+    }
+
+    function handleOrientation(event) {
+      let heading = null;
+      if (event.absolute && event.alpha !== null) {
+        heading = (360 - event.alpha) % 360;
+      } else if (event.webkitCompassHeading !== undefined) {
+        heading = event.webkitCompassHeading;
+      } else if (event.alpha !== null) {
+        heading = (360 - event.alpha) % 360;
+      }
+
+      if (heading !== null) {
+        myHeading = heading;
+        headingStatusEl.textContent = `כיוון: ${Math.round(heading)}° מצפון`;
+        updateCalReadiness();
+        updateArrow();       // updates angle card + arrow
+      }
+
+      // Tilt (gamma): negative = leaning left, positive = leaning right
+      if (event.gamma !== null && event.gamma !== undefined) {
+        myTiltRaw = Math.round(event.gamma * 10) / 10;  // keep one decimal raw
+        collectCalSample(myTiltRaw);                    // feed calibration if running
+        pushTiltSample(myTiltRaw);
+        const avg = calcSmoothedTilt();
+        applyHysteresis(avg);                           // updates tiltSide
+        myTilt = avg;                                   // store smoothed value
+        updateMyTiltDisplay();
+        // Emit smoothed tilt so the other phone's audio uses clean data
+        if (myLat !== null)
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide, headingCompass: myHeading, headingGPS: myHeadingGPS });
+      }
+    }
+
+    function updateMyTiltDisplay() {
+      if (myTilt === null) return;
+      // Main number = smoothed 10s average
+      myTiltValEl.textContent = myTilt.toFixed(1);
+      // Direction: hysteresis-confirmed side + raw reading in parentheses
+      const sideLabel = tiltSide === 1 ? "ימין ✓" : tiltSide === -1 ? "שמאל ✓" : "ישר";
+      const rawLabel  = myTiltRaw !== null ? ` (גולמי: ${myTiltRaw}°, אפס: ${tiltZeroOffset}°)` : "";
+      myTiltDirEl.textContent = `${sideLabel}${rawLabel}`;
+      // SVG animation uses the smoothed value
+      animateTiltPhone(myTiltPhoneEl, myTilt);
+      myTiltColEl.classList.remove("unavailable");
+      refreshLog();
+      logDataPoint();
+    }
+
+    function requestCompassPermission() {
+      if (typeof DeviceOrientationEvent.requestPermission === "function") {
+        DeviceOrientationEvent.requestPermission()
+          .then((state) => {
+            if (state === "granted") {
+              startCompass();
+              permissionBtn.style.display = "none";
+              headingStatusEl.textContent = "חיישן כיוון פעיל";
+              refreshLog("הרשאת מצפן אושרה");
+            } else {
+              headingStatusEl.textContent = "הרשאה נדחתה";
+              refreshLog("הרשאת מצפן נדחתה");
+            }
+          })
+          .catch(() => {
+            headingStatusEl.textContent = "שגיאה בגישה לחיישן";
+            refreshLog("שגיאה בגישה לחיישן");
+          });
+      }
+    }
+
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      permissionBtn.style.display = "inline-block";
+      headingStatusEl.textContent = "נדרשת אישור לגישה לחיישן";
+    } else {
+      startCompass();
+    }
+
+    // ── Receive other device location ─────────────────────────────────
+    socket.on("receive-location", (data) => {
+      otherLat = parseFloat(data.lat);
+      otherLng = parseFloat(data.lng);
+      if (data.headingCompass !== null && data.headingCompass !== undefined) otherHeadingCompass = data.headingCompass;
+      if (data.headingGPS     !== null && data.headingGPS     !== undefined) otherHeadingGPS     = data.headingGPS;
+
+      if (myLat === null || myLng === null) {
+        refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} (ממתין ל-GPS שלי)`);
+        // Still update other tilt if present
+        if (data.tilt !== null && data.tilt !== undefined) {
+          otherTilt     = data.tilt;
+          otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
+          updateOtherTiltDisplay();
+        }
+        return;
+      }
+
+      const oLat    = parseFloat(data.lat);
+      const oLng    = parseFloat(data.lng);
+      const dist    = haversineDistance(myLat, myLng, oLat, oLng);
+      lastBearing   = calcBearing(myLat, myLng, oLat, oLng);
+
+      const distFmt = dist < 1000
+        ? Math.round(dist) + " מטרים"
+        : (dist / 1000).toFixed(2) + " ק״מ";
+      distanceEl.textContent = dist < 1000 ? Math.round(dist) : (dist / 1000).toFixed(2);
+      distUnitEl.textContent = dist < 1000 ? "מטרים" : "ק״מ";
+
+      // Other tilt — use the sender's already-computed tiltSide directly
+      if (data.tilt !== null && data.tilt !== undefined) {
+        otherTilt     = data.tilt;
+        otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
+        updateOtherTiltDisplay();
+      } else {
+        otherTilt = null;
+        otherTiltValEl.textContent = "--";
+        otherTiltDirEl.textContent = "הטלפון השני לא שולח נתוני הטייה";
+        otherTiltColEl.classList.add("unavailable");
+        animateTiltPhone(otherTiltPhoneEl, null);
+      }
+
+      updateCalReadiness();
+      updateArrow();
+
+      refreshLog(`קיבלנו מיקום שני: ${oLat.toFixed(5)}, ${oLng.toFixed(5)} | מרחק: ${distFmt}`);
+    });
+
+    function updateOtherTiltDisplay() {
+      // otherTiltSide is now set directly from the sender — no local recalculation needed
+      otherTiltValEl.textContent = typeof otherTilt === "number" ? otherTilt.toFixed(1) : otherTilt;
+      const sideLabel = otherTiltSide === 1 ? "ימין ✓" : otherTiltSide === -1 ? "שמאל ✓" : "ישר";
+      otherTiltDirEl.textContent = sideLabel;
+      animateTiltPhone(otherTiltPhoneEl, otherTilt);
+      otherTiltColEl.classList.remove("unavailable");
+    }
+
+    // ── Arrow / angle ─────────────────────────────────────────────────
+    // Track cumulative rotation so the CSS transition always takes the short path
+    // across the 0°/360° boundary (avoids the 358°-spin-the-wrong-way bug).
+    let arrowCurrentDeg = 0;   // last value fed to CSS transform (unbounded integer)
+
+    function shortestRotation(from, to) {
+      // Returns the new cumulative angle closest to 'from', never more than 180° away
+      let diff = ((to - from) % 360 + 360) % 360;  // 0–359
+      if (diff > 180) diff -= 360;                  // now -180 to +180
+      return from + diff;
+    }
+
+    function updateArrow() {
+      if (lastBearing === null) return;
+
+      // Use compass heading; fall back to GPS velocity heading if compass unavailable
+      const activeHeading = myHeading !== null ? myHeading : myHeadingGPS;
+
+      let displayAngle;
+      if (activeHeading !== null) {
+        const rawRelative  = (lastBearing - activeHeading + 360) % 360;
+        displayAngle = (rawRelative - calibrationOffset + 360) % 360;
+      } else {
+        displayAngle = (lastBearing + 360) % 360;
+      }
+
+      // Unwrap: pick the shortest path from the previous cumulative angle
+      arrowCurrentDeg = shortestRotation(arrowCurrentDeg, displayAngle);
+      arrowEl.style.transform = `rotate(${arrowCurrentDeg}deg)`;
+
+      const display0to360 = ((displayAngle % 360) + 360) % 360;
+      if (activeHeading !== null) {
+        angleEl.textContent = Math.round(display0to360);
+      } else {
+        angleEl.textContent = Math.round(display0to360) + " (צפון)";
+      }
+    }
+
+    // ── Math helpers ──────────────────────────────────────────────────
+    function haversineDistance(lat1, lon1, lat2, lon2) {
+      const dy = (lat2 - lat1) * 111320;
+      const dx = (lon2 - lon1) * 111320 * Math.cos((lat1 + lat2) / 2 * Math.PI / 180);
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function calcBearing(lat1, lon1, lat2, lon2) {
+      const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const y  = Math.sin(Δλ) * Math.cos(φ2);
+      const x  = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+      return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    }
+
+
+    const muteBtn     = document.getElementById("mute-btn");
+    const audioStatus = document.getElementById("audio-status");
+
+    let audioCtx   = null;
+    let masterGain = null;
+    let isMuted    = true;
+    let cycleTimer = null;
+
+    // Global reference to the in-flight SpeechSynthesisUtterance.
+    // Some Android/V8 builds garbage-collect the utterance object if it isn't
+    // referenced anywhere outside the function that created it, silently
+    // killing speech mid-utterance. Keeping a global reference prevents this.
+    let currentUtterance = null;
+
+    const CYCLE_MS = 5000;
+
+    // Distance in metres → "סירה" units (÷7, rounded, min 1)
+    function distanceToShips(metres) {
+      if (metres === null || metres === undefined) return null;
+      return Math.max(1, Math.round(metres / 7));
+    }
+
+    // Angle (0–360, 0=ahead) → clock hour 1–12
+    function angleToClock(deg) {
+      const norm = ((deg % 360) + 360) % 360;
+      let hour = Math.round(norm / 30) % 12;
+      return hour === 0 ? 12 : hour;
+    }
+
+    function getCurrentAngleDeg() {
+      const txt = angleEl.textContent;
+      if (!txt || txt === "--") return null;
+      const n = parseFloat(txt);
+      return isNaN(n) ? null : n;
+    }
+
+    function getCurrentMetres() {
+      const dTxt = distanceEl.textContent;
+      const uTxt = distUnitEl.textContent;
+      if (dTxt === "--") return null;
+      let m = parseFloat(dTxt);
+      if (uTxt === "ק״מ") m *= 1000;
+      return isNaN(m) ? null : m;
+    }
+
+    function resumeAudio() {
+      if (!audioCtx || audioCtx.state === "closed") return Promise.reject();
+      if (audioCtx.state === "running") return Promise.resolve();
+      return audioCtx.resume();
+    }
+
+    // ── Voice detection ───────────────────────────────────────────────
+    let _heVoice    = null;
+    let _voiceReady = false;
+
+    function _detectVoice() {
+      if (!window.speechSynthesis) { _voiceReady = true; return; }
+      const voices = speechSynthesis.getVoices();
+      if (voices.length === 0) return;
+      _heVoice    = voices.find(v => v.lang.startsWith("he")) || null;
+      _voiceReady = true;
+    }
+    if (window.speechSynthesis) {
+      _detectVoice();
+      speechSynthesis.addEventListener("voiceschanged", _detectVoice);
+    } else {
+      _voiceReady = true;
+    }
+
+    // ── Speak one phrase, call onDone when finished ───────────────────
+    // Skips if no Hebrew voice. Always calls onDone (via guard if needed).
+    function speakPhrase(text, onDone) {
+      if (!_voiceReady || !_heVoice || !window.speechSynthesis) {
+        setTimeout(onDone, 0);
+        return;
+      }
+      speechSynthesis.cancel();
+      setTimeout(() => {
+        // Store in the global slot (not just a local const) so V8/Android
+        // cannot garbage-collect the utterance while speech is in progress.
+        currentUtterance          = new SpeechSynthesisUtterance(text);
+        currentUtterance.voice    = _heVoice;
+        currentUtterance.lang     = _heVoice.lang;
+        currentUtterance.rate     = 1.1;
+        currentUtterance.volume   = masterVolume;
+        let called   = false;
+        function done() {
+          if (called) return;
+          called = true;
+          currentUtterance = null;   // only released once speech has actually ended
+          resumeAudio().catch(() => {}).finally(onDone);
+        }
+        const guard  = setTimeout(done, 4000);
+        currentUtterance.onend    = () => { clearTimeout(guard); done(); };
+        currentUtterance.onerror  = () => { clearTimeout(guard); done(); };
+        speechSynthesis.speak(currentUtterance);
+      }, 60);
+    }
+
+    // Run phrases in sequence: array of strings, then call onDone
+    function speakSequence(phrases, onDone) {
+      if (!phrases.length) { onDone(); return; }
+      const [first, ...rest] = phrases;
+      speakPhrase(first, () => {
+        // Short pause between phrases
+        setTimeout(() => speakSequence(rest, onDone), 150);
+      });
+    }
+
+    // ── Cycle: clock → distance → tilt every 5 seconds ───────────────
+    function runCycle() {
+      if (isMuted) return;
+
+      const angleDeg      = getCurrentAngleDeg();
+      const metres        = getCurrentMetres();
+      const effectiveSide = otherTiltSide !== 0
+        ? otherTiltSide
+        : (otherTilt !== null ? (otherTilt > 0 ? 1 : -1) : 0);
+
+      const clockHour  = angleDeg !== null ? angleToClock(angleDeg) : null;
+      const shipDist   = distanceToShips(metres);
+      const tiltWord   = effectiveSide > 0 ? "שמאל" : effectiveSide < 0 ? "ימין" : null;
+
+      // Status line
+      const parts = [];
+      if (clockHour) parts.push(`שעה: ${clockHour}`);
+      if (shipDist)  parts.push(`מרחק: ${shipDist} סירות`);
+      if (tiltWord)  parts.push(`מפנה: ${tiltWord}`);
+      audioStatus.textContent = parts.length
+        ? (_heVoice ? parts.join(" | ") : "⚠️ אין קול עברי — " + parts.join(" | "))
+        : "פעיל — ממתין לנתונים...";
+
+      if (!_heVoice) return;   // nothing to speak
+      if (!clockHour && !shipDist && !tiltWord) return;
+
+      // Build the phrase list
+      const phrases = [];
+      if (clockHour !== null) phrases.push(clockHour.toString());
+      if (shipDist  !== null) phrases.push(shipDist.toString());
+      if (tiltWord  !== null) phrases.push(tiltWord);
+
+      speakSequence(phrases, () => {});
+    }
+
+    function startCycle() {
+      if (cycleTimer) return;
+      runCycle();
+      cycleTimer = setInterval(runCycle, CYCLE_MS);
+    }
+
+    function stopCycle() {
+      if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
+      try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch(e) {}
+    }
+
+    function toggleMute() {
+      // ── iOS Speech Unlock ──
+      // Must run synchronously, directly inside the click handler, outside any
+      // Promise/async callback — this is what grants the page permission to use
+      // SpeechSynthesis later on iOS Safari.
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+
+      if (isMuted) {
+        // ── Voice availability check ──
+        if (_heVoice === null) {
+          alert("לא נמצא קול עברי במכשיר זה.\n\nכדי להפעיל הקראה קולית בעברית, יש להוריד ולהתקין קול עברי בהגדרות הנגישות / הקראת טקסט (TTS) של מכשיר זה.");
+        }
+
+        if (!audioCtx) {
+          try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          } catch(e) {
+            audioStatus.textContent = "שגיאה: הדפדפן לא תומך ב-Web Audio";
+            return;
+          }
+          masterGain = audioCtx.createGain();
+          masterGain.connect(audioCtx.destination);
+        }
+        // iOS unlock
+        try {
+          const buf = audioCtx.createBuffer(1, 1, 22050);
+          const src = audioCtx.createBufferSource();
+          src.buffer = buf; src.connect(audioCtx.destination); src.start(0);
+        } catch(e) {}
+
+        audioCtx.resume().then(() => {
+          masterGain.gain.setValueAtTime(1, audioCtx.currentTime);
+          isMuted = false;
+          muteBtn.textContent = "🔇 השתק חיווי קולי";
+          muteBtn.classList.remove("muted");
+          volumeSection.classList.add("visible");
+          audioStatus.textContent = _heVoice ? "פעיל" : "פעיל (⚠️ אין קול עברי)";
+          startCycle();
+        }).catch(() => {
+          audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
+        });
+
+      } else {
+        isMuted = true;
+        muteBtn.textContent = "🔊 השמע חיווי קולי";
+        muteBtn.classList.add("muted");
+        audioStatus.textContent = "כבוי";
+        stopCycle();
+        volumeSection.classList.remove("visible");
+      }
+    }
+
+    // Resume cycle when tab becomes visible again
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && audioCtx && !isMuted) {
+        audioCtx.resume().then(() => { if (!cycleTimer) startCycle(); }).catch(() => {});
+      }
+    });
+
+    const volumeSection = document.getElementById("volume-section");
+    const volumeSlider  = document.getElementById("volume-slider");
+    const volumeDisplay = document.getElementById("volume-display");
+
+    function onVolumeChange(val) {
+      masterVolume = val / 100;
+      volumeDisplay.textContent = val + "%";
+      volumeSlider.style.setProperty("--vol-pct", val + "%");
+    }
+    onVolumeChange(volumeSlider.value);
+
+    function ensureAudioReady() {
+      if (!audioCtx) return false;
+      if (audioCtx.state === "closed") return false;
+      return true;   // even if suspended — callers must await resumeAudio() before scheduling
+    }
+
+    // Returns a Promise that resolves once AudioContext is truly running.
+    // Must be called (and awaited) before scheduling any Web Audio nodes,
+    // especially after TTS on iOS which steals and releases the audio session.
+    // Initial log render
+    refreshLog("הדף נטען");
+  </script>
+</body>
+</html>
