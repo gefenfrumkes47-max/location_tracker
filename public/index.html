@@ -1326,6 +1326,15 @@
           muteBtn.classList.remove("muted");
           volumeSection.classList.add("visible");
           audioStatus.textContent = _heVoice ? "פעיל" : "פעיל (⚠️ אין קול עברי)";
+          // iOS fix: unlock speechSynthesis immediately inside the user tap.
+          // iOS blocks TTS from timers unless speak() was called at least once
+          // directly from a user gesture. We speak a silent space to unlock it.
+          if (window.speechSynthesis) {
+            const unlock = new SpeechSynthesisUtterance(" ");
+            unlock.volume = 0;
+            if (_heVoice) unlock.voice = _heVoice;
+            speechSynthesis.speak(unlock);
+          }
           startCycle();
         }).catch(() => {
           audioStatus.textContent = "שגיאה: לא ניתן להפעיל שמע";
