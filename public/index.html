@@ -512,12 +512,6 @@
       <span>🔊</span>
     </div>
     <input type="range" id="volume-slider" min="0" max="100" value="80" oninput="onVolumeChange(this.value)">
-    <div class="volume-label-row" style="margin-top:12px;">
-      <span style="font-size:0.75rem;color:#6b6b9a;">קצב חיווי</span>
-      <span id="interval-display" style="font-size:0.75rem;color:#a78bfa;">5 שניות</span>
-    </div>
-    <input type="range" id="interval-slider" min="1" max="30" value="5" oninput="onIntervalChange(this.value)"
-      style="margin-top:4px;">
   </div>
 
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
@@ -624,8 +618,8 @@
     // tiltDir uses the SMOOTHED value (already hysteresis-filtered)
     function tiltDir(deg) {
       if (deg === null || deg === undefined) return "--";
-      if (deg < 0) return `${Math.abs(deg)}° ימין`;
-      if (deg > 0) return `${deg}° שמאל`;
+      if (deg < 0) return `${Math.abs(deg)}° שמאל`;
+      if (deg > 0) return `${deg}° ימין`;
       return "ישר";
     }
 
@@ -994,7 +988,7 @@
       // Main number = smoothed 10s average
       myTiltValEl.textContent = myTilt.toFixed(1);
       // Direction: hysteresis-confirmed side + raw reading in parentheses
-      const sideLabel = tiltSide === 1 ? "שמאל ✓" : tiltSide === -1 ? "ימין ✓" : "ישר";
+      const sideLabel = tiltSide === 1 ? "ימין ✓" : tiltSide === -1 ? "שמאל ✓" : "ישר";
       const rawLabel  = myTiltRaw !== null ? ` (גולמי: ${myTiltRaw}°, אפס: ${tiltZeroOffset}°)` : "";
       myTiltDirEl.textContent = `${sideLabel}${rawLabel}`;
       // SVG animation uses the smoothed value
@@ -1043,9 +1037,7 @@
         // Still update other tilt if present
         if (data.tilt !== null && data.tilt !== undefined) {
           otherTilt     = data.tilt;
-          const newSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
-          checkTiltChangeAlert(newSide);
-          otherTiltSide = newSide;
+          otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
           updateOtherTiltDisplay();
         }
         return;
@@ -1063,9 +1055,7 @@
       // Other tilt — use the sender's already-computed tiltSide directly
       if (data.tilt !== null && data.tilt !== undefined) {
         otherTilt     = data.tilt;
-        const newSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
-        checkTiltChangeAlert(newSide);   // must be before assigning otherTiltSide
-        otherTiltSide = newSide;
+        otherTiltSide = (data.tiltSide !== undefined && data.tiltSide !== null) ? data.tiltSide : 0;
         updateOtherTiltDisplay();
       } else {
         otherTilt = null;
@@ -1075,7 +1065,6 @@
         animateTiltPhone(otherTiltPhoneEl, null);
       }
 
-      checkDistanceAlerts(dist);
       updateCalReadiness();
       updateArrow();
 
@@ -1085,7 +1074,7 @@
     function updateOtherTiltDisplay() {
       // otherTiltSide is now set directly from the sender — no local recalculation needed
       otherTiltValEl.textContent = typeof otherTilt === "number" ? otherTilt.toFixed(1) : otherTilt;
-      const sideLabel = otherTiltSide === 1 ? "שמאל ✓" : otherTiltSide === -1 ? "ימין ✓" : "ישר";
+      const sideLabel = otherTiltSide === 1 ? "ימין ✓" : otherTiltSide === -1 ? "שמאל ✓" : "ישר";
       otherTiltDirEl.textContent = sideLabel;
       animateTiltPhone(otherTiltPhoneEl, otherTilt);
       otherTiltColEl.classList.remove("unavailable");
@@ -1153,50 +1142,15 @@
     let isMuted    = true;
     let cycleTimer = null;
 
-    // ── Interval slider (1–30 s) ──────────────────────────────────────
-    let userIntervalSec = 5;   // set by slider
-    const intervalSlider  = document.getElementById("interval-slider");
-    const intervalDisplay = document.getElementById("interval-display");
+    const CYCLE_MS = 5000;
 
-    function onIntervalChange(val) {
-      userIntervalSec = parseInt(val);
-      intervalDisplay.textContent = `${userIntervalSec} שניות`;
-      // Restart the cycle timer with the new interval (if running)
-      if (cycleTimer) { stopCycle(); startCycle(); }
-    }
-
-    function effectiveCycleMs() {
-      const metres = getCurrentMetres();
-      if (metres !== null && metres < 21) return (userIntervalSec * 1000) / 2;
-      return userIntervalSec * 1000;
-    }
-
-    // ── Alert state ───────────────────────────────────────────────────
-    let alert3BoatsFired    = false;  // true after "שלושה אורכי סירה" fired
-    let alertCollisionFired = false;  // true after "מסלול התנגשות" fired
-    let prevOtherTiltSide   = null;   // to detect tilt flip
-    let alertBusy           = false;  // prevent overlapping alerts
-
-    // ── Volume ────────────────────────────────────────────────────────
-    let masterVolume = 0.8;
-
-    const volumeSection = document.getElementById("volume-section");
-    const volumeSlider  = document.getElementById("volume-slider");
-    const volumeDisplay = document.getElementById("volume-display");
-
-    function onVolumeChange(val) {
-      masterVolume = val / 100;
-      volumeDisplay.textContent = val + "%";
-      volumeSlider.style.setProperty("--vol-pct", val + "%");
-    }
-    onVolumeChange(volumeSlider.value);
-
-    // ── Helpers ───────────────────────────────────────────────────────
+    // Distance in metres → "סירה" units (÷7, rounded, min 1)
     function distanceToShips(metres) {
       if (metres === null || metres === undefined) return null;
       return Math.max(1, Math.round(metres / 7));
     }
 
+    // Angle (0–360, 0=ahead) → clock hour 1–12
     function angleToClock(deg) {
       const norm = ((deg % 360) + 360) % 360;
       let hour = Math.round(norm / 30) % 12;
@@ -1243,118 +1197,58 @@
       _voiceReady = true;
     }
 
-    // ── Speak one phrase ──────────────────────────────────────────────
-    // pitch: 1.0 = normal, >1.0 = higher (for proximity alerts)
-    function speakPhrase(text, onDone, pitch) {
+    // ── Speak one phrase, call onDone when finished ───────────────────
+    // Skips if no Hebrew voice. Always calls onDone (via guard if needed).
+    function speakPhrase(text, onDone) {
       if (!_voiceReady || !_heVoice || !window.speechSynthesis) {
-        setTimeout(onDone, 0); return;
+        setTimeout(onDone, 0);
+        return;
       }
       speechSynthesis.cancel();
       setTimeout(() => {
-        const utt   = new SpeechSynthesisUtterance(text);
-        utt.voice   = _heVoice;
-        utt.lang    = _heVoice.lang;
-        utt.rate    = 1.1;
-        utt.volume  = masterVolume;
-        utt.pitch   = (pitch !== undefined) ? pitch : 1.0;
-        let called  = false;
+        const utt    = new SpeechSynthesisUtterance(text);
+        utt.voice    = _heVoice;
+        utt.lang     = _heVoice.lang;
+        utt.rate     = 1.1;
+        utt.volume   = masterVolume;
+        let called   = false;
         function done() {
-          if (called) return; called = true;
+          if (called) return;
+          called = true;
           resumeAudio().catch(() => {}).finally(onDone);
         }
-        const guard = setTimeout(done, 4000);
-        utt.onend   = () => { clearTimeout(guard); done(); };
-        utt.onerror = () => { clearTimeout(guard); done(); };
+        const guard  = setTimeout(done, 4000);
+        utt.onend    = () => { clearTimeout(guard); done(); };
+        utt.onerror  = () => { clearTimeout(guard); done(); };
         speechSynthesis.speak(utt);
       }, 60);
     }
 
-    // Speak array of phrases in sequence, each with optional pitch
-    // phrases: array of strings OR {text, pitch} objects
+    // Run phrases in sequence: array of strings, then call onDone
     function speakSequence(phrases, onDone) {
-      if (!phrases.length) { if (onDone) onDone(); return; }
-      const item  = phrases[0];
-      const rest  = phrases.slice(1);
-      const text  = typeof item === "string" ? item : item.text;
-      const pitch = typeof item === "string" ? 1.0  : (item.pitch || 1.0);
-      speakPhrase(text, () => {
+      if (!phrases.length) { onDone(); return; }
+      const [first, ...rest] = phrases;
+      speakPhrase(first, () => {
+        // Short pause between phrases
         setTimeout(() => speakSequence(rest, onDone), 150);
-      }, pitch);
+      });
     }
 
-    // ── Alert: speak immediately, interrupting cycle if needed ────────
-    function fireAlert(text, pitch) {
-      if (alertBusy) return;
-      alertBusy = true;
-      if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
-      try { speechSynthesis.cancel(); } catch(e) {}
-      speakPhrase(text, () => {
-        alertBusy = false;
-        // Restart cycle with potentially new interval
-        startCycle();
-      }, pitch || 1.0);
-    }
-
-    // ── Distance alerts (called every time distance updates) ──────────
-    function checkDistanceAlerts(metres) {
-      if (metres === null || alertBusy) return;
-
-      // "מסלול התנגשות" at ≤7m (fire once, reset only if goes above 14m)
-      if (metres <= 7) {
-        if (!alertCollisionFired) {
-          alertCollisionFired = true;
-          alert3BoatsFired    = true;  // 3-boats also considered fired
-          fireAlert("מסלול התנגשות", 1.6);
-          return;
-        }
-      } else if (metres > 14) {
-        alertCollisionFired = false;
-      }
-
-      // "שלושה אורכי סירה" at ≤21m (reset after going above 25m)
-      if (metres <= 21) {
-        if (!alert3BoatsFired) {
-          alert3BoatsFired = true;
-          fireAlert("שלושה אורכי סירה", 1.3);
-          return;
-        }
-      } else if (metres > 25) {
-        alert3BoatsFired = false;
-      }
-    }
-
-    // ── Tilt-change alert ─────────────────────────────────────────────
-    // Called whenever otherTiltSide updates. Fires if side flipped.
-    function checkTiltChangeAlert(newSide) {
-      if (prevOtherTiltSide !== null &&
-          prevOtherTiltSide !== 0    &&
-          newSide !== 0              &&
-          newSide !== prevOtherTiltSide) {
-        fireAlert("שינוי מפנה", 1.0);
-      }
-      prevOtherTiltSide = newSide;
-    }
-
-    // ── Main cycle ────────────────────────────────────────────────────
+    // ── Cycle: clock → distance → tilt every 5 seconds ───────────────
     function runCycle() {
-      if (isMuted || alertBusy) return;
+      if (isMuted) return;
 
       const angleDeg      = getCurrentAngleDeg();
       const metres        = getCurrentMetres();
-      // positive tiltSide(+1) = left turn, negative(-1) = right turn
       const effectiveSide = otherTiltSide !== 0
         ? otherTiltSide
         : (otherTilt !== null ? (otherTilt > 0 ? 1 : -1) : 0);
 
-      const clockHour = angleDeg !== null ? angleToClock(angleDeg) : null;
-      const shipDist  = distanceToShips(metres);
-      // +1 side = left, -1 side = right (flipped from raw gamma sign)
-      const tiltWord  = effectiveSide > 0 ? "שמאל" : effectiveSide < 0 ? "ימין" : null;
+      const clockHour  = angleDeg !== null ? angleToClock(angleDeg) : null;
+      const shipDist   = distanceToShips(metres);
+      const tiltWord   = effectiveSide > 0 ? "ימין" : effectiveSide < 0 ? "שמאל" : null;
 
-      // Pitch: elevated when close
-      const closePitch = (metres !== null && metres < 21) ? 1.4 : 1.0;
-
-      // Status display
+      // Status line
       const parts = [];
       if (clockHour) parts.push(`שעה: ${clockHour}`);
       if (shipDist)  parts.push(`מרחק: ${shipDist} סירות`);
@@ -1363,13 +1257,14 @@
         ? (_heVoice ? parts.join(" | ") : "⚠️ אין קול עברי — " + parts.join(" | "))
         : "פעיל — ממתין לנתונים...";
 
-      if (!_heVoice) return;
+      if (!_heVoice) return;   // nothing to speak
       if (!clockHour && !shipDist && !tiltWord) return;
 
+      // Build the phrase list
       const phrases = [];
-      if (clockHour !== null) phrases.push({ text: clockHour.toString(), pitch: closePitch });
-      if (shipDist  !== null) phrases.push({ text: shipDist.toString(),  pitch: closePitch });
-      if (tiltWord  !== null) phrases.push({ text: tiltWord,             pitch: closePitch });
+      if (clockHour !== null) phrases.push(clockHour.toString());
+      if (shipDist  !== null) phrases.push(shipDist.toString());
+      if (tiltWord  !== null) phrases.push(tiltWord);
 
       speakSequence(phrases, () => {});
     }
@@ -1377,14 +1272,7 @@
     function startCycle() {
       if (cycleTimer) return;
       runCycle();
-      const ms = effectiveCycleMs();
-      cycleTimer = setInterval(() => {
-        // Re-evaluate interval on each tick (distance may have changed)
-        const newMs = effectiveCycleMs();
-        runCycle();
-        // If interval changed, restart timer
-        if (newMs !== ms) { stopCycle(); startCycle(); }
-      }, ms);
+      cycleTimer = setInterval(runCycle, CYCLE_MS);
     }
 
     function stopCycle() {
@@ -1404,6 +1292,7 @@
           masterGain = audioCtx.createGain();
           masterGain.connect(audioCtx.destination);
         }
+        // iOS unlock
         try {
           const buf = audioCtx.createBuffer(1, 1, 22050);
           const src = audioCtx.createBufferSource();
@@ -1432,12 +1321,33 @@
       }
     }
 
+    // Resume cycle when tab becomes visible again
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && audioCtx && !isMuted) {
         audioCtx.resume().then(() => { if (!cycleTimer) startCycle(); }).catch(() => {});
       }
     });
 
+    const volumeSection = document.getElementById("volume-section");
+    const volumeSlider  = document.getElementById("volume-slider");
+    const volumeDisplay = document.getElementById("volume-display");
+
+    function onVolumeChange(val) {
+      masterVolume = val / 100;
+      volumeDisplay.textContent = val + "%";
+      volumeSlider.style.setProperty("--vol-pct", val + "%");
+    }
+    onVolumeChange(volumeSlider.value);
+
+    function ensureAudioReady() {
+      if (!audioCtx) return false;
+      if (audioCtx.state === "closed") return false;
+      return true;   // even if suspended — callers must await resumeAudio() before scheduling
+    }
+
+    // Returns a Promise that resolves once AudioContext is truly running.
+    // Must be called (and awaited) before scheduling any Web Audio nodes,
+    // especially after TTS on iOS which steals and releases the audio session.
     // Initial log render
     refreshLog("הדף נטען");
   </script>
