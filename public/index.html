@@ -1254,7 +1254,7 @@
 
       const clockHour  = angleDeg !== null ? angleToClock(angleDeg) : null;
       const shipDist   = distanceToShips(metres);
-      const tiltWord   = effectiveSide > 0 ? "ימין" : effectiveSide < 0 ? "שמאל" : null;
+      const tiltWord   = effectiveSide > 0 ? "שמאל" : effectiveSide < 0 ? "ימין" : null;
 
       // Status line
       const parts = [];
