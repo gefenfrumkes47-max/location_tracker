@@ -466,9 +466,12 @@
     <div class="log-section">── הטלפון שלי ──────────────</div>
     <div class="log-row"><span class="log-key">GPS</span>           <span class="log-val dim" id="ll-my-gps">--</span></div>
     <div class="log-row"><span class="log-key">כיוון (צפון)</span>  <span class="log-val dim" id="ll-my-heading">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון (GPS)</span>   <span class="log-val dim" id="ll-my-heading-gps">--</span></div>
     <div class="log-row"><span class="log-key">הטיה</span>          <span class="log-val dim" id="ll-my-tilt">--</span></div>
     <div class="log-section">── טלפון שני ───────────────</div>
     <div class="log-row"><span class="log-key">GPS שני</span>        <span class="log-val dim" id="ll-other-gps">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון שני (צפון)</span><span class="log-val dim" id="ll-other-heading">--</span></div>
+    <div class="log-row"><span class="log-key">כיוון שני (GPS)</span> <span class="log-val dim" id="ll-other-heading-gps">--</span></div>
     <div class="log-row"><span class="log-key">הטיה שני</span>       <span class="log-val dim" id="ll-other-tilt">--</span></div>
     <div class="log-section">── מדידה ───────────────────</div>
     <div class="log-row"><span class="log-key">מרחק</span>           <span class="log-val dim" id="ll-dist">--</span></div>
@@ -548,15 +551,18 @@
     const otherTiltColEl   = document.getElementById("other-tilt-col");
 
     // Log rows
-    const llMyGps     = document.getElementById("ll-my-gps");
-    const llMyHeading = document.getElementById("ll-my-heading");
-    const llMyTilt    = document.getElementById("ll-my-tilt");
-    const llOtherGps  = document.getElementById("ll-other-gps");
-    const llOtherTilt = document.getElementById("ll-other-tilt");
-    const llDist      = document.getElementById("ll-dist");
-    const llAngle     = document.getElementById("ll-angle");
-    const llTime      = document.getElementById("ll-time");
-    const llEvent     = document.getElementById("ll-event");
+    const llMyGps           = document.getElementById("ll-my-gps");
+    const llMyHeading       = document.getElementById("ll-my-heading");
+    const llMyHeadingGPS    = document.getElementById("ll-my-heading-gps");
+    const llMyTilt          = document.getElementById("ll-my-tilt");
+    const llOtherGps        = document.getElementById("ll-other-gps");
+    const llOtherHeading    = document.getElementById("ll-other-heading");
+    const llOtherHeadingGPS = document.getElementById("ll-other-heading-gps");
+    const llOtherTilt       = document.getElementById("ll-other-tilt");
+    const llDist            = document.getElementById("ll-dist");
+    const llAngle           = document.getElementById("ll-angle");
+    const llTime            = document.getElementById("ll-time");
+    const llEvent           = document.getElementById("ll-event");
 
     // Record
     const recordBtn     = document.getElementById("record-btn");
@@ -564,7 +570,10 @@
 
     // ── State ─────────────────────────────────────────────────────────
     let myLat = null, myLng = null;
-    let myHeading = null;       // degrees from North
+    let myHeading = null;       // degrees from North (compass)
+    let myHeadingGPS = null;    // degrees from North (velocity vector)
+    let otherHeadingCompass = null;  // other phone's compass heading
+    let otherHeadingGPS = null;      // other phone's GPS velocity heading
     let myTilt = null;          // smoothed tilt (10s average, after hysteresis)
     let myTiltRaw = null;       // latest raw gamma reading
 
@@ -753,6 +762,11 @@
       else
         setLogVal(llMyHeading, "ממתין למצפן...", false);
 
+      if (myHeadingGPS !== null)
+        setLogVal(llMyHeadingGPS, `${Math.round(myHeadingGPS)}°`);
+      else
+        setLogVal(llMyHeadingGPS, "ממתין לתנועה...", false);
+
       if (myTilt !== null)
         setLogVal(llMyTilt, tiltDir(myTilt));
       else
@@ -763,6 +777,16 @@
         setLogVal(llOtherGps, `${otherLat.toFixed(5)}, ${otherLng.toFixed(5)}`);
       else
         setLogVal(llOtherGps, "טרם התקבל", false);
+
+      if (otherHeadingCompass !== null)
+        setLogVal(llOtherHeading, `${Math.round(otherHeadingCompass)}°`);
+      else
+        setLogVal(llOtherHeading, "טרם התקבל", false);
+
+      if (otherHeadingGPS !== null)
+        setLogVal(llOtherHeadingGPS, `${Math.round(otherHeadingGPS)}°`);
+      else
+        setLogVal(llOtherHeadingGPS, "טרם התקבל", false);
 
       if (otherTilt !== null)
         setLogVal(llOtherTilt, tiltDir(otherTilt));
@@ -815,27 +839,30 @@
       const ang  = angleEl.textContent;
       // Log even if no other phone — record what we have
       recordedData.push({
-        time:        nowStr(),
-        wind_dir:    selectedWindDir  || "",
-        wind_type:   selectedWindType || "",
-        my_lat:      myLat  !== null ? myLat.toFixed(6)  : "",
-        my_lng:      myLng  !== null ? myLng.toFixed(6)  : "",
-        my_heading:  myHeading !== null ? Math.round(myHeading) : "",
-        my_tilt:     myTilt !== null ? myTilt : "",
-        other_lat:   otherLat  !== null ? otherLat.toFixed(6)  : "",
-        other_lng:   otherLng  !== null ? otherLng.toFixed(6)  : "",
-        other_tilt:  otherTilt !== null ? otherTilt : "",
-        distance:    dist !== "--" ? dist : "",
-        angle:       ang  !== "--" ? ang  : "",
+        time:               nowStr(),
+        wind_dir:           selectedWindDir  || "",
+        wind_type:          selectedWindType || "",
+        my_lat:             myLat  !== null ? myLat.toFixed(6)  : "",
+        my_lng:             myLng  !== null ? myLng.toFixed(6)  : "",
+        my_heading_compass: myHeading    !== null ? Math.round(myHeading)    : "",
+        my_heading_gps:     myHeadingGPS !== null ? Math.round(myHeadingGPS) : "",
+        my_tilt:            myTilt !== null ? myTilt : "",
+        other_lat:          otherLat  !== null ? otherLat.toFixed(6)  : "",
+        other_lng:          otherLng  !== null ? otherLng.toFixed(6)  : "",
+        other_heading_compass: otherHeadingCompass !== null ? Math.round(otherHeadingCompass) : "",
+        other_heading_gps:     otherHeadingGPS     !== null ? Math.round(otherHeadingGPS)     : "",
+        other_tilt:         otherTilt !== null ? otherTilt : "",
+        distance:           dist !== "--" ? dist : "",
+        angle:              ang  !== "--" ? ang  : "",
       });
       recordCountEl.textContent = `מקליט... ${recordedData.length} נקודות`;
     }
 
     function downloadCSV() {
       if (recordedData.length === 0) { recordCountEl.textContent = "אין נתונים להורדה"; return; }
-      const header = "זמן,כיוון_מפנה,סוג_רוח,GPS_שלי_lat,GPS_שלי_lng,כיוון_צפון,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,הטיה_שני,מרחק,זווית\n";
+      const header = "זמן,כיוון_מפנה,סוג_רוח,GPS_שלי_lat,GPS_שלי_lng,כיוון_מצפן_שלי,כיוון_GPS_שלי,הטיה_שלי,GPS_שני_lat,GPS_שני_lng,כיוון_מצפן_שני,כיוון_GPS_שני,הטיה_שני,מרחק,זווית\n";
       const rows = recordedData.map(r =>
-        `${r.time},${r.wind_dir},${r.wind_type},${r.my_lat},${r.my_lng},${r.my_heading},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_tilt},${r.distance},${r.angle}`
+        `${r.time},${r.wind_dir},${r.wind_type},${r.my_lat},${r.my_lng},${r.my_heading_compass},${r.my_heading_gps},${r.my_tilt},${r.other_lat},${r.other_lng},${r.other_heading_compass},${r.other_heading_gps},${r.other_tilt},${r.distance},${r.angle}`
       ).join("\n");
       const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
       const url  = URL.createObjectURL(blob);
@@ -925,8 +952,12 @@
         (pos) => {
           myLat = pos.coords.latitude;
           myLng = pos.coords.longitude;
+          // Velocity-vector heading (null if not moving or unavailable)
+          if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+            myHeadingGPS = pos.coords.heading;
+          }
           myLocationEl.textContent = `${myLat.toFixed(5)}, ${myLng.toFixed(5)}`;
-          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide, headingCompass: myHeading, headingGPS: myHeadingGPS });
           updateCalReadiness();
           refreshLog("GPS עודכן");
         },
@@ -979,7 +1010,7 @@
         updateMyTiltDisplay();
         // Emit smoothed tilt so the other phone's audio uses clean data
         if (myLat !== null)
-          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide });
+          socket.emit("send-location", { lat: myLat, lng: myLng, tilt: myTilt, tiltSide: tiltSide, headingCompass: myHeading, headingGPS: myHeadingGPS });
       }
     }
 
@@ -1031,6 +1062,8 @@
     socket.on("receive-location", (data) => {
       otherLat = parseFloat(data.lat);
       otherLng = parseFloat(data.lng);
+      if (data.headingCompass !== null && data.headingCompass !== undefined) otherHeadingCompass = data.headingCompass;
+      if (data.headingGPS     !== null && data.headingGPS     !== undefined) otherHeadingGPS     = data.headingGPS;
 
       if (myLat === null || myLng === null) {
         refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} (ממתין ל-GPS שלי)`);
@@ -1097,9 +1130,12 @@
     function updateArrow() {
       if (lastBearing === null) return;
 
+      // Prefer GPS velocity heading; fall back to compass
+      const activeHeading = myHeadingGPS !== null ? myHeadingGPS : myHeading;
+
       let displayAngle;
-      if (myHeading !== null) {
-        const rawRelative  = (lastBearing - myHeading + 360) % 360;
+      if (activeHeading !== null) {
+        const rawRelative  = (lastBearing - activeHeading + 360) % 360;
         displayAngle = (rawRelative - calibrationOffset + 360) % 360;
       } else {
         displayAngle = (lastBearing + 360) % 360;
@@ -1110,7 +1146,7 @@
       arrowEl.style.transform = `rotate(${arrowCurrentDeg}deg)`;
 
       const display0to360 = ((displayAngle % 360) + 360) % 360;
-      if (myHeading !== null) {
+      if (activeHeading !== null) {
         angleEl.textContent = Math.round(display0to360);
       } else {
         angleEl.textContent = Math.round(display0to360) + " (צפון)";
