@@ -569,7 +569,7 @@
     let myTiltRaw = null;       // latest raw gamma reading
 
     // Rolling buffer: { value, ts } entries for the last 10 seconds
-    const TILT_WINDOW_MS = 10000;
+    const TILT_WINDOW_MS = 2000;
     const TILT_HYSTERESIS = 5;  // degrees — must cross ±5° to change side
     let tiltBuffer = [];        // raw samples in the window
     let tiltSide = 0;           // -1 left, 0 centre, +1 right (hysteresis state)
@@ -1029,8 +1029,8 @@
 
     // ── Receive other device location ─────────────────────────────────
     socket.on("receive-location", (data) => {
-      otherLat = data.lat;
-      otherLng = data.lng;
+      otherLat = parseFloat(data.lat);
+      otherLng = parseFloat(data.lng);
 
       if (myLat === null || myLng === null) {
         refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} (ממתין ל-GPS שלי)`);
@@ -1043,8 +1043,10 @@
         return;
       }
 
-      const dist    = haversineDistance(myLat, myLng, data.lat, data.lng);
-      lastBearing   = calcBearing(myLat, myLng, data.lat, data.lng);
+      const oLat    = parseFloat(data.lat);
+      const oLng    = parseFloat(data.lng);
+      const dist    = haversineDistance(myLat, myLng, oLat, oLng);
+      lastBearing   = calcBearing(myLat, myLng, oLat, oLng);
 
       const distFmt = dist < 1000
         ? Math.round(dist) + " מטרים"
@@ -1068,7 +1070,7 @@
       updateCalReadiness();
       updateArrow();
 
-      refreshLog(`קיבלנו מיקום שני: ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)} | מרחק: ${distFmt}`);
+      refreshLog(`קיבלנו מיקום שני: ${oLat.toFixed(5)}, ${oLng.toFixed(5)} | מרחק: ${distFmt}`);
     });
 
     function updateOtherTiltDisplay() {
@@ -1117,12 +1119,9 @@
 
     // ── Math helpers ──────────────────────────────────────────────────
     function haversineDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371000;
-      const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
-      const Δφ = (lat2 - lat1) * Math.PI / 180;
-      const Δλ = (lon2 - lon1) * Math.PI / 180;
-      const a  = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const dy = (lat2 - lat1) * 111320;
+      const dx = (lon2 - lon1) * 111320 * Math.cos((lat1 + lat2) / 2 * Math.PI / 180);
+      return Math.sqrt(dx * dx + dy * dy);
     }
 
     function calcBearing(lat1, lon1, lat2, lon2) {
