@@ -1178,62 +1178,67 @@
       if (audioCtx.state === "running") return Promise.resolve();
       return audioCtx.resume();
     }
-
-    // ── Voice detection ───────────────────────────────────────────────
+    // ── Voice detection — with polling fallback ───────────────────────────────
     let _heVoice    = null;
+    let _anyVoice   = null;
     let _voiceReady = false;
 
     function _detectVoice() {
       if (!window.speechSynthesis) { _voiceReady = true; return; }
       const voices = speechSynthesis.getVoices();
-      if (voices.length === 0) return;
-      _heVoice    = voices.find(v => v.lang.startsWith("he")) || null;
+      if (voices.length === 0) return;                       // not loaded yet
+      _heVoice   = voices.find(v => v.lang.startsWith("he")) || null;
+      _anyVoice  = voices.find(v => v.default) || voices[0] || null;
       _voiceReady = true;
     }
+
     if (window.speechSynthesis) {
       _detectVoice();
       speechSynthesis.addEventListener("voiceschanged", _detectVoice);
+      // Polling fallback: some browsers fire voiceschanged before our listener attaches
+      let _voicePollCount = 0;
+      const _voicePoll = setInterval(() => {
+        _detectVoice();
+        if (_voiceReady || ++_voicePollCount > 20) clearInterval(_voicePoll);
+      }, 250);
     } else {
       _voiceReady = true;
     }
 
-    // ── Speak one phrase, call onDone when finished ───────────────────
-    // Skips if no Hebrew voice. Always calls onDone (via guard if needed).
+    // ── Speak one phrase ──────────────────────────────────────────────────────
     function speakPhrase(text, onDone) {
-      if (!_voiceReady || !_heVoice || !window.speechSynthesis) {
+      // BUG 1 FIX: use any available voice if no Hebrew voice found
+      const voice = _heVoice || _anyVoice;
+      if (!_voiceReady || !voice || !window.speechSynthesis) {
         setTimeout(onDone, 0);
         return;
       }
       speechSynthesis.cancel();
       setTimeout(() => {
-        const utt    = new SpeechSynthesisUtterance(text);
-        utt.voice    = _heVoice;
-        utt.lang     = _heVoice.lang;
-        utt.rate     = 1.1;
-        utt.volume   = masterVolume;
-        let called   = false;
+        const utt   = new SpeechSynthesisUtterance(text);
+        utt.voice   = voice;
+        utt.lang    = voice.lang;
+        utt.rate    = 1.1;
+        utt.volume  = masterVolume;
+        let called  = false;
         function done() {
           if (called) return;
           called = true;
-          resumeAudio().catch(() => {}).finally(onDone);
+          // BUG 3 FIX: wait for AudioContext to truly resume before calling onDone
+          resumeAudio().catch(() => {}).then(onDone, onDone);
         }
-        const guard  = setTimeout(done, 4000);
-        utt.onend    = () => { clearTimeout(guard); done(); };
-        utt.onerror  = () => { clearTimeout(guard); done(); };
+        const guard = setTimeout(done, 4000);
+        utt.onend   = () => { clearTimeout(guard); done(); };
+        utt.onerror = () => { clearTimeout(guard); done(); };
         speechSynthesis.speak(utt);
       }, 60);
     }
 
-    // Run phrases in sequence: array of strings, then call onDone
-    function speakSequence(phrases, onDone) {
-      if (!phrases.length) { onDone(); return; }
-      const [first, ...rest] = phrases;
-      speakPhrase(first, () => {
-        // Short pause between phrases
-        setTimeout(() => speakSequence(rest, onDone), 150);
-      });
-    }
-
+// ── runCycle: speak even without Hebrew voice ─────────────────────────────
+// (in the runCycle function, replace this block:)
+//   if (!_heVoice) return;   // nothing to speak
+// with:
+  if (!_heVoice && !_anyVoice) return;   // truly no TTS available
     // ── Cycle: clock → distance → tilt every 5 seconds ───────────────
     function runCycle() {
       if (isMuted) return;
