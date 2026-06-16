@@ -1142,6 +1142,12 @@
     let isMuted    = true;
     let cycleTimer = null;
 
+    // Global reference to the in-flight SpeechSynthesisUtterance.
+    // Some Android/V8 builds garbage-collect the utterance object if it isn't
+    // referenced anywhere outside the function that created it, silently
+    // killing speech mid-utterance. Keeping a global reference prevents this.
+    let currentUtterance = null;
+
     const CYCLE_MS = 5000;
 
     // Distance in metres → "סירה" units (÷7, rounded, min 1)
@@ -1206,21 +1212,24 @@
       }
       speechSynthesis.cancel();
       setTimeout(() => {
-        const utt    = new SpeechSynthesisUtterance(text);
-        utt.voice    = _heVoice;
-        utt.lang     = _heVoice.lang;
-        utt.rate     = 1.1;
-        utt.volume   = masterVolume;
+        // Store in the global slot (not just a local const) so V8/Android
+        // cannot garbage-collect the utterance while speech is in progress.
+        currentUtterance          = new SpeechSynthesisUtterance(text);
+        currentUtterance.voice    = _heVoice;
+        currentUtterance.lang     = _heVoice.lang;
+        currentUtterance.rate     = 1.1;
+        currentUtterance.volume   = masterVolume;
         let called   = false;
         function done() {
           if (called) return;
           called = true;
+          currentUtterance = null;   // only released once speech has actually ended
           resumeAudio().catch(() => {}).finally(onDone);
         }
         const guard  = setTimeout(done, 4000);
-        utt.onend    = () => { clearTimeout(guard); done(); };
-        utt.onerror  = () => { clearTimeout(guard); done(); };
-        speechSynthesis.speak(utt);
+        currentUtterance.onend    = () => { clearTimeout(guard); done(); };
+        currentUtterance.onerror  = () => { clearTimeout(guard); done(); };
+        speechSynthesis.speak(currentUtterance);
       }, 60);
     }
 
@@ -1281,7 +1290,18 @@
     }
 
     function toggleMute() {
+      // ── iOS Speech Unlock ──
+      // Must run synchronously, directly inside the click handler, outside any
+      // Promise/async callback — this is what grants the page permission to use
+      // SpeechSynthesis later on iOS Safari.
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+
       if (isMuted) {
+        // ── Voice availability check ──
+        if (_heVoice === null) {
+          alert("לא נמצא קול עברי במכשיר זה.\n\nכדי להפעיל הקראה קולית בעברית, יש להוריד ולהתקין קול עברי בהגדרות הנגישות / הקראת טקסט (TTS) של מכשיר זה.");
+        }
+
         if (!audioCtx) {
           try {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
